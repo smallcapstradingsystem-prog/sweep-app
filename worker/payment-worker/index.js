@@ -29,8 +29,9 @@ const PRICE_USD_CENTS = 500; // $5.00 per sweep
 
 const BUNDLES = {
   'single':  { credits: 1,  priceCents: 500 },
-  'pack-5':  { credits: 5,  priceCents: 2250 },
+  'pack-5':  { credits: 5,  priceCents: 2000 },
   'pack-10': { credits: 10, priceCents: 4000 },
+  'pack-25': { credits: 25, priceCents: 8000 },
 };
 
 const USDC_ADDRESSES = {

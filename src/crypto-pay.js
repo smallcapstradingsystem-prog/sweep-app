@@ -1,13 +1,17 @@
 /**
- * crypto-pay.js — Crypto payment modal.
- *
- * Shows the user a method picker, then displays the address + exact
- * amount to send, with a QR code and a live status indicator.
+ * crypto-pay.js — Crypto payment modal with bundle picker.
  */
 
 import QRCode from 'qrcode';
 import { requestCryptoQuote, pollCryptoPayment } from './credits.js';
 import { el } from './ui.js';
+
+const BUNDLES = [
+  { id: 'single',  label: '1 credit',  price: '$5',  hint: '$5.00 per sweep' },
+  { id: 'pack-5',  label: '5 credits', price: '$20', hint: '$4.00 per sweep' },
+  { id: 'pack-10', label: '10 credits',price: '$40', hint: '$4.00 per sweep' },
+  { id: 'pack-25', label: '25 credits',price: '$80', hint: '$3.20 per sweep', badge: 'Best value' },
+];
 
 const METHODS = [
   { id: 'usdc-base',     label: 'USDC on Base',     icon: '🔵', hint: 'Cheapest — ~$0.01 gas' },
@@ -19,21 +23,21 @@ const METHODS = [
 
 let pollCancelled = false;
 
-export function showCryptoPaymentModal(bundle = 'single') {
+export function showCryptoPaymentModal(defaultBundle = 'single') {
   return new Promise((resolve, reject) => {
     pollCancelled = false;
-    const modal = buildModal(bundle, resolve, reject);
+    const modal = buildModal(defaultBundle, resolve, reject);
     document.body.appendChild(modal);
   });
 }
 
-function buildModal(bundle, resolve, reject) {
+function buildModal(defaultBundle, resolve, reject) {
   const overlay = el('div', { class: 'modal-overlay' });
-  const modal = el('div', { class: 'modal' });
+  const modal = el('div', { class: 'modal modal-wide' });
   overlay.appendChild(modal);
 
   modal.appendChild(el('div', { class: 'modal-header' }, [
-    el('h2', { text: 'Pay with crypto' }),
+    el('h2', { text: 'Buy sweep credits' }),
     el('button', {
       class: 'modal-close',
       text: '×',
@@ -44,7 +48,42 @@ function buildModal(bundle, resolve, reject) {
   const body = el('div', { class: 'modal-body' });
   modal.appendChild(body);
 
-  body.appendChild(el('p', { class: 'hint', text: 'Choose which asset to send. USDC on Base is cheapest.' }));
+  // ---- Step 1: pick a bundle ----
+  body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
+
+  const bundleList = el('div', { class: 'bundle-list' });
+  for (const b of BUNDLES) {
+    const btn = el('button', {
+      class: 'bundle-card' + (b.badge ? ' featured' : ''),
+      onclick: () => showMethodPicker(b, body, overlay, resolve, reject),
+    }, [
+      b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
+      el('div', { class: 'bundle-label', text: b.label }),
+      el('div', { class: 'bundle-price', text: b.price }),
+      el('div', { class: 'bundle-hint', text: b.hint }),
+    ].filter(Boolean));
+    bundleList.appendChild(btn);
+  }
+  body.appendChild(bundleList);
+
+  return overlay;
+}
+
+function showMethodPicker(bundle, body, overlay, resolve, reject) {
+  body.innerHTML = '';
+
+  body.appendChild(el('button', {
+    class: 'link-back',
+    text: '← Back to bundles',
+    onclick: () => {
+      body.innerHTML = '';
+      const modal = overlay.querySelector('.modal');
+      modal.innerHTML = '';
+      modal.appendChild(buildModalContent(resolve, reject));
+    },
+  }));
+
+  body.appendChild(el('h3', { text: `Pay ${bundle.price} — choose a method` }));
 
   const methodList = el('div', { class: 'crypto-methods' });
   for (const m of METHODS) {
@@ -61,8 +100,6 @@ function buildModal(bundle, resolve, reject) {
     ]));
   }
   body.appendChild(methodList);
-
-  return overlay;
 }
 
 async function selectMethod(method, bundle, body, overlay, resolve, reject) {
@@ -71,14 +108,14 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
 
   let quote;
   try {
-    quote = await requestCryptoQuote(bundle, method.id);
+    quote = await requestCryptoQuote(bundle.id, method.id);
   } catch (err) {
     body.innerHTML = '';
     body.appendChild(el('p', { class: 'error', text: `Failed: ${err.message}` }));
     body.appendChild(el('button', {
       class: 'btn btn-secondary',
       text: 'Try another method',
-      onclick: () => { overlay.remove(); showCryptoPaymentModal(bundle).then(resolve).catch(reject); },
+      onclick: () => { overlay.remove(); showCryptoPaymentModal(bundle.id).then(resolve).catch(reject); },
     }));
     return;
   }
@@ -91,6 +128,7 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
   infoBox.appendChild(field('Token', quote.token));
   infoBox.appendChild(field('Address', quote.address, true));
   infoBox.appendChild(field('Amount', `${quote.amount} ${quote.token}`, true, true));
+  infoBox.appendChild(field('You receive', `${quote.credits} credit${quote.credits > 1 ? 's' : ''}`));
   body.appendChild(infoBox);
 
   const qrContainer = el('div', { class: 'crypto-qr' });
@@ -138,6 +176,38 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
     status.innerHTML = '';
     status.appendChild(el('p', { class: 'error', text: `Failed: ${err.message}` }));
   }
+}
+
+function buildModalContent(resolve, reject) {
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(el('div', { class: 'modal-header' }, [
+    el('h2', { text: 'Buy sweep credits' }),
+    el('button', {
+      class: 'modal-close',
+      text: '×',
+      onclick: () => { pollCancelled = true; reject(new Error('Cancelled')); },
+    }),
+  ]));
+  const body = el('div', { class: 'modal-body' });
+  body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
+  const bundleList = el('div', { class: 'bundle-list' });
+  for (const b of BUNDLES) {
+    bundleList.appendChild(el('button', {
+      class: 'bundle-card' + (b.badge ? ' featured' : ''),
+      onclick: (e) => {
+        const overlay = e.target.closest('.modal-overlay');
+        showMethodPicker(b, overlay.querySelector('.modal-body'), overlay, resolve, reject);
+      },
+    }, [
+      b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
+      el('div', { class: 'bundle-label', text: b.label }),
+      el('div', { class: 'bundle-price', text: b.price }),
+      el('div', { class: 'bundle-hint', text: b.hint }),
+    ].filter(Boolean)));
+  }
+  body.appendChild(bundleList);
+  fragment.appendChild(body);
+  return fragment;
 }
 
 function field(label, value, copyable = false, highlight = false) {
