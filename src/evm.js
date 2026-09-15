@@ -32,7 +32,8 @@ const CHAINS = {
     weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
     router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
     quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    feeTiers: [500, 3000, 10000],
+    // Includes 100 (0.01%) — where USDT/USDC and other stable pairs trade on mainnet
+    feeTiers: [100, 500, 3000, 10000],
     reserveMultiplier: 4n,
     baseReserveWei: ethers.parseEther('0.002'),
   },
@@ -97,14 +98,7 @@ export function getProvider(chain) {
 
 /**
  * Compute the reserve we must keep in a wallet for gas.
- *
- * Formula: max(baseReserveWei, gasPrice * 300k * reserveMultiplier)
- *
- * `baseReserveWei` is a hard floor — even at near-zero gas price, we
- * keep this much back so subsequent transactions always have something.
- *
- * `reserveMultiplier` is the safety factor on top of the estimate.
- * Ethereum mainnet uses 4x because gas can spike mid-sweep; L2s use 3x.
+ * See earlier notes — max of hard floor and gasPrice * 300k * multiplier.
  */
 async function computeReserve(chain, provider) {
   const cfg = CHAINS[chain];
@@ -186,15 +180,43 @@ export async function previewWallet(chain, walletAddress) {
   return result;
 }
 
+/**
+ * Try every fee tier and return the best quote found.
+ *
+ * - Logs each failed tier with the reason, so we can see WHY a route
+ *   wasn't found instead of guessing.
+ * - Returns { fee, out } for the tier with the highest output, or null
+ *   if every tier failed.
+ */
 async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   let best = null;
+  const failures = [];
+
   for (const fee of feeTiers) {
     try {
-      const q = await quoter.quoteExactInputSingle.staticCall({ tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0 });
+      const q = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn,
+        tokenOut,
+        amountIn,
+        fee,
+        sqrtPriceLimitX96: 0,
+      });
       const out = q[0] ?? q.amountOut;
       if (!best || out > best.out) best = { fee, out };
-    } catch (e) {}
+    } catch (e) {
+      // Collect the failure reason so callers can log it if no tier works
+      failures.push({ fee, reason: shortError(e) });
+    }
   }
+
+  if (!best) {
+    // No tier produced a valid quote. Attach failures so the caller can
+    // see them if it wants. Callers that don't care can ignore this.
+    findBestQuote.lastFailures = failures;
+  } else {
+    findBestQuote.lastFailures = null;
+  }
+
   return best;
 }
 
@@ -241,7 +263,19 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         const bal = await tokenContract.balanceOf(address);
         if (bal === 0n) continue;
         const best = await findBestQuote(quoter, token.address, usdc, bal, cfg.feeTiers);
-        if (!best) { results.swaps.push({ symbol: token.symbol, status: 'NO_ROUTE' }); continue; }
+        if (!best) {
+          // Include the per-tier failure reasons so the user/operator
+          // can see why no route was found.
+          const reasons = (findBestQuote.lastFailures || [])
+            .map((f) => `${f.fee / 10000}%: ${f.reason}`)
+            .join('; ');
+          results.swaps.push({
+            symbol: token.symbol,
+            status: 'NO_ROUTE',
+            note: reasons ? `tried tiers → ${reasons}` : 'all fee tiers returned empty',
+          });
+          continue;
+        }
         const minOut = best.out - (best.out * slippageBps) / 10000n;
         if (dryRun) {
           results.swaps.push({ symbol: token.symbol, amountIn: ethers.formatUnits(bal, token.decimals), amountOutExpected: ethers.formatUnits(best.out, 6), amountOutMinimum: ethers.formatUnits(minOut, 6), feeTier: best.fee, status: 'DRY_RUN' });
@@ -257,10 +291,6 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   }
 
   // ---- Native token → USDC ----
-  //
-  // In dry run, we ignore the reserve entirely and quote the full balance,
-  // because nothing is actually being spent. The reserve only matters when
-  // we sign transactions, which only happens in live mode.
   try {
     const nativeBal = await provider.getBalance(address);
     const minSwap = ethers.parseEther('0.00005');
@@ -268,11 +298,13 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
     if (nativeBal <= minSwap) {
       // Nothing to report
     } else if (dryRun) {
-      // Quote the full balance — no reserve in dry run
       const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
       const best = await findBestQuote(quoter, cfg.weth, usdc, nativeBal, cfg.feeTiers);
       if (!best) {
-        results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE' });
+        const reasons = (findBestQuote.lastFailures || [])
+          .map((f) => `${f.fee / 10000}%: ${f.reason}`)
+          .join('; ');
+        results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: reasons });
       } else {
         results.swaps.push({
           symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
@@ -283,15 +315,16 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         });
       }
     } else {
-      // Live: keep the reserve back for gas
       const reserve = await computeReserve(chain, provider);
-
       if (nativeBal > reserve + minSwap) {
         const wrapAmount = nativeBal - reserve;
         const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
         const best = await findBestQuote(quoter, cfg.weth, usdc, wrapAmount, cfg.feeTiers);
         if (!best) {
-          results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE' });
+          const reasons = (findBestQuote.lastFailures || [])
+            .map((f) => `${f.fee / 10000}%: ${f.reason}`)
+            .join('; ');
+          results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: reasons });
         } else {
           const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
           const wrapTx = await weth.deposit({ value: wrapAmount });
@@ -305,7 +338,6 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           results.swaps.push({ symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH', txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
         }
       } else if (nativeBal > 0n) {
-        // Live only: wallet has some native but not enough above reserve
         results.swaps.push({
           symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
           status: 'SKIPPED',
@@ -327,8 +359,10 @@ function shortError(e) {
   if (msg.includes('user rejected')) return 'rejected';
   if (msg.includes('nonce has already been used')) return 'nonce conflict';
   if (msg.includes('replacement transaction underpriced')) return 'nonce conflict';
-  if (msg.includes('CALL_EXCEPTION')) return 'call reverted (no route or slippage)';
+  if (msg.includes('CALL_EXCEPTION')) return 'reverted';
   if (msg.includes('could not detect network')) return 'RPC unreachable';
+  if (msg.includes('missing revert data')) return 'no pool';
+  if (msg.includes('STF')) return 'no pool or insufficient liquidity';
   return msg.length > 120 ? msg.slice(0, 120) + '...' : msg;
 }
 
