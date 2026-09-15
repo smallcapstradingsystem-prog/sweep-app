@@ -84,10 +84,17 @@ const ERC20_ABI = [
   'function transfer(address, uint256) returns (bool)',
 ];
 const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
-const QUOTER_ABI = ['function quoteExactInputSingle((address,address,uint256,uint24,uint160)) returns (uint256,uint160,uint32,uint256)'];
-const ROUTER_ABI = ['function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)'];
 
-// Skip swaps whose quoted USDC output is below this threshold (in USDC, 6 decimals).
+// Struct fields are NAMED here so ethers v6 accepts object-form calls.
+// Without the names, ethers throws "cannot use object value with unnamed components".
+const QUOTER_ABI = [
+  'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+];
+
+const ROUTER_ABI = [
+  'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
+];
+
 const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
 
 const providerCache = {};
@@ -214,22 +221,6 @@ function failureNote(failures) {
   return failures.map((f) => `${f.fee / 10000}%: ${f.reason}`).join('; ');
 }
 
-/**
- * Simulate a swap via staticCall before signing.
- *
- * This catches:
- *   - Fee-on-transfer tokens (transfer amount mismatch → revert)
- *   - Rebasing tokens (balance changed between quote and swap → revert)
- *   - Honeypots (transfer blocked → revert)
- *   - Whitelisted/restricted tokens (transfer restricted → revert)
- *
- * Returns { ok: true } if the swap would succeed, or
- *         { ok: false, reason: '...' } if it would revert.
- *
- * The simulation is cheap (no gas, no tx) and runs against the current
- * state of the chain. It's the same check Uniswap's own UI does before
- * prompting you to sign.
- */
 async function simulateSwap(router, params, signer) {
   try {
     await router.connect(signer).exactInputSingle.staticCall(params);
@@ -294,7 +285,6 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
-        // Dust skip
         if (best.out < MIN_SWAP_VALUE_USDC) {
           results.swaps.push({
             symbol: token.symbol,
@@ -318,10 +308,11 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
-        // ---- PRE-FLIGHT SIMULATION ----
-        // Before spending gas on approve + swap, check that the swap
-        // would actually succeed. Catches fee-on-transfer, honeypots,
-        // rebasing, and restricted tokens.
+        // Approve first (required before the router can be simulated)
+        const approveTx = await ensureApproval(tokenContract, address, cfg.router, bal, signer);
+        if (approveTx) await approveTx.wait();
+
+        // Pre-flight simulation
         const simParams = {
           tokenIn: token.address,
           tokenOut: usdc,
@@ -332,24 +323,12 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           sqrtPriceLimitX96: 0,
         };
 
-        // For the simulation to be meaningful, the router must be able to
-        // pull the token — which requires approval. If we haven't approved
-        // yet, we can't simulate the swap safely. So we approve first, then
-        // simulate, then swap. The approve is a sunk cost either way.
-        const approveTx = await ensureApproval(tokenContract, address, cfg.router, bal, signer);
-        if (approveTx) await approveTx.wait();
-
         const sim = await simulateSwap(router, simParams, signer);
         if (!sim.ok) {
-          results.swaps.push({
-            symbol: token.symbol,
-            status: 'SKIPPED',
-            note: sim.reason,
-          });
+          results.swaps.push({ symbol: token.symbol, status: 'SKIPPED', note: sim.reason });
           continue;
         }
 
-        // Simulation passed — broadcast for real
         const tx = await router.exactInputSingle(simParams);
         const receipt = await tx.wait();
         results.swaps.push({
@@ -439,6 +418,7 @@ function shortError(e) {
   if (msg.includes('could not detect network')) return 'RPC unreachable';
   if (msg.includes('missing revert data')) return 'no pool';
   if (msg.includes('STF')) return 'no pool or insufficient liquidity';
+  if (msg.includes('cannot use object value with unnamed components')) return 'ABI mismatch';
   return msg.length > 120 ? msg.slice(0, 120) + '...' : msg;
 }
 
