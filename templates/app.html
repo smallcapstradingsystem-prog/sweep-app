@@ -35,10 +35,35 @@
         <section class="card">
             <h2>1. Wallet source</h2>
             <div class="checks">
-                <label><input type="radio" name="wallet-type" value="mnemonic" checked> Paste mnemonic(s)</label>
+                <label><input type="radio" name="wallet-type" value="extension"> Browser extension (MetaMask, Rabby, Coinbase)</label>
                 <label><input type="radio" name="wallet-type" value="walletconnect"> WalletConnect (MetaMask Mobile, Rainbow, Trust)</label>
+                <label><input type="radio" name="wallet-type" value="mnemonic" checked> Paste mnemonic(s)</label>
                 <label><input type="radio" name="wallet-type" value="ledger"> Ledger (WebHID)</label>
                 <label><input type="radio" name="wallet-type" value="trezor"> Trezor</label>
+            </div>
+
+            <!-- Browser Extension -->
+            <div id="wallet-extension" class="wallet-section" style="display:none;">
+                <p class="hint" style="margin-top: 16px;">
+                    Connect with the wallet extension installed in your browser.
+                    Works with MetaMask, Rabby, Coinbase Wallet, Brave Wallet, and others.
+                </p>
+                <button id="connect-button" class="btn btn-primary">Connect Browser Wallet</button>
+                <p class="hint" style="margin-top: 12px;">
+                    <strong>Note:</strong> Browser extensions support EVM chains only.
+                    Solana and Bitcoin sweeping require a mnemonic.
+                </p>
+            </div>
+
+            <!-- WalletConnect -->
+            <div id="wallet-walletconnect" class="wallet-section" style="display:none;">
+                <p class="hint" style="margin-top: 16px;">Scan the QR with your mobile wallet, or approve in your browser extension.</p>
+                <button id="connect-button" class="btn btn-primary">Connect WalletConnect</button>
+                <div id="wc-qr" style="margin-top:16px;"></div>
+                <p class="hint" style="margin-top: 12px;">
+                    <strong>Note:</strong> WalletConnect supports EVM chains only.
+                    Solana and Bitcoin sweeping require a mnemonic.
+                </p>
             </div>
 
             <!-- Mnemonic -->
@@ -54,17 +79,6 @@
                     placeholder="word1 word2 word3 ...&#10;word1 word2 word3 ..."
                 ></textarea>
                 <p class="hint">Supports EVM + Solana + Bitcoin derivations from the same phrase.</p>
-            </div>
-
-            <!-- WalletConnect -->
-            <div id="wallet-walletconnect" class="wallet-section" style="display:none;">
-                <p class="hint" style="margin-top: 16px;">Scan the QR with your mobile wallet, or approve in your browser extension.</p>
-                <button id="connect-button" class="btn btn-primary">Connect WalletConnect</button>
-                <div id="wc-qr" style="margin-top:16px;"></div>
-                <p class="hint" style="margin-top: 12px;">
-                    <strong>Note:</strong> WalletConnect supports EVM chains only.
-                    Solana and Bitcoin sweeping require a mnemonic.
-                </p>
             </div>
 
             <!-- Ledger -->
@@ -123,8 +137,6 @@
                 <label><input type="radio" name="mode" value="live"> Live (uses 1 credit, broadcasts real transactions)</label>
             </div>
 
-            <!-- Live mode warning: informational only. Appears when Live is selected.
-                 Does NOT block, delay, or interfere with the payment flow. -->
             <div id="live-warning" class="alert alert-warn" style="display:none; margin-top:16px;">
                 <strong>⚠ Before running a live sweep:</strong>
                 <ul style="margin: 8px 0 0 0; padding-left: 0; font-size: 14px; line-height: 1.7; list-style: none;">

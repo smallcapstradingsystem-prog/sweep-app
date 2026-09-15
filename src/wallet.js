@@ -1,13 +1,5 @@
 /**
- * wallet.js — Signing backends: mnemonic, WalletConnect, Ledger, Trezor.
- * =====================================================================
- * The rest of the app only needs one thing from a "wallet":
- *   - Its address
- *   - The ability to sign and broadcast EVM transactions
- *
- * Everything else (deriving from a mnemonic, connecting to a browser
- * extension, talking to a hardware device) is implementation detail
- * hidden behind this interface.
+ * wallet.js — Signing backends: mnemonic, WalletConnect, Ledger, Trezor, Browser Extension.
  */
 
 import { ethers } from 'ethers';
@@ -51,6 +43,103 @@ export class MnemonicWallet {
     this._solana = null;
     this._bitcoin = null;
   }
+}
+
+// =====================================================================
+// BROWSER EXTENSION BACKEND (MetaMask, Rabby, Coinbase, etc.)
+// =====================================================================
+//
+// Uses the injected `window.ethereum` provider. Works with any wallet
+// that follows the EIP-1193 standard: MetaMask, Rabby, Coinbase Wallet,
+// Brave Wallet, Frame, etc.
+//
+// Limitations:
+//   - EVM chains only (Solana/Bitcoin still require a mnemonic)
+//   - The user must approve every transaction in the extension popup
+//   - If the extension is on the wrong chain, we ask it to switch
+// =====================================================================
+
+export class BrowserExtensionBackend {
+  constructor(ethersProvider, address, chainId) {
+    this.provider = ethersProvider;   // ethers.BrowserProvider wrapping window.ethereum
+    this.rawProvider = ethersProvider.provider; // the EIP-1193 provider
+    this.address = address;
+    this.chainId = chainId;
+  }
+
+  async getAddress() {
+    return this.address;
+  }
+
+  async getEthersSigner(_provider) {
+    return this.provider.getSigner();
+  }
+
+  getSolanaKeypair() {
+    throw new Error('Browser extensions do not support Solana in this build');
+  }
+
+  getBitcoinKeyPair() {
+    throw new Error('Browser extensions do not support Bitcoin in this build');
+  }
+
+  /**
+   * Ask the extension to switch to a specific chain.
+   * Called by the sweep code before each chain's transactions.
+   */
+  async switchChain(chainId) {
+    const hex = '0x' + Number(chainId).toString(16);
+    if (this.chainId === Number(chainId)) return true;
+    try {
+      await this.rawProvider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: hex }],
+      });
+      this.chainId = Number(chainId);
+      return true;
+    } catch (e) {
+      // 4902 = chain not added to the wallet
+      if (e.code === 4902 || (e.message && e.message.includes('Unrecognized chain ID'))) {
+        throw new Error(`Wallet does not have chain ${chainId} configured. Add it to the wallet and try again.`);
+      }
+      throw e;
+    }
+  }
+
+  async dispose() {
+    // Browser extensions don't have a "disconnect" concept — the user
+    // just closes the popup or revokes the site's access manually.
+  }
+}
+
+export async function connectBrowserExtension() {
+  if (typeof window === 'undefined' || !window.ethereum) {
+    throw new Error(
+      'No browser wallet detected. Install MetaMask, Rabby, or another EIP-1193 wallet extension and reload the page.'
+    );
+  }
+
+  const raw = window.ethereum;
+
+  // Handle multiple providers (e.g. both MetaMask and Coinbase installed).
+  // EIP-6963 wallets announce themselves; we prefer the first MetaMask.
+  const target = raw.providers?.find((p) => p.isMetaMask) || raw;
+
+  // Request accounts — this triggers the popup
+  const accounts = await target.request({ method: 'eth_requestAccounts' });
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No accounts returned by the browser wallet');
+  }
+  const address = accounts[0];
+
+  // Read current chain
+  const chainIdHex = await target.request({ method: 'eth_chainId' });
+  const chainId = parseInt(chainIdHex, 16);
+
+  // Wrap in ethers
+  const ethersProvider = new ethers.BrowserProvider(target);
+
+  return new BrowserExtensionBackend(ethersProvider, address, chainId);
 }
 
 // =====================================================================
@@ -184,10 +273,6 @@ export class LedgerBackend {
 
         const sig = await ethApp.signTransaction(path, unsignedHex);
 
-        // Normalize `v`: Ledger may return 27 or 28 (legacy EIP-155 yParity)
-        // even for EIP-1559 transactions, where ethers expects 0 or 1.
-        // For legacy transactions, ethers re-wraps 0/1 into the correct
-        // EIP-155 form using the transaction's chainId internally.
         let v = parseInt(sig.v, 16);
         if (v >= 27) v -= 27;
 
@@ -404,6 +489,9 @@ export async function createWallet(config) {
     case 'mnemonic':
       if (!config.phrase) throw new Error('Mnemonic requires a phrase');
       return new MnemonicWallet(config.phrase);
+
+    case 'extension':
+      return await connectBrowserExtension();
 
     case 'walletconnect':
       return await connectWalletConnect({

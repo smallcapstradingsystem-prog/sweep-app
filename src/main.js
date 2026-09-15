@@ -94,6 +94,17 @@ async function connectWalletAndStore() {
       return;
     }
 
+    if (walletType === 'extension') {
+      logLine('Connecting to browser wallet...');
+      const backend = await createWallet({ type: 'extension' });
+      state.wallet = backend;
+      const addr = await backend.getAddress();
+      logLine(`Connected: ${addr}`);
+      $('#connected-address').textContent = addr;
+      show('#connected-banner');
+      return;
+    }
+
     if (walletType === 'walletconnect') {
       logLine('Connecting WalletConnect...');
       const qrContainer = $('#wc-qr');
@@ -277,7 +288,6 @@ async function runSweep(live) {
 
   // ---- PAYMENT GATE (only for live) ----
   if (live) {
-    // Log-only gas reminder. Does not block.
     logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
     logLine('  Ethereum mainnet: ~0.005 ETH');
     logLine('  Base / Arbitrum / Optimism: ~0.0002 ETH');
@@ -333,9 +343,20 @@ async function runSweep(live) {
         logLine(`\n[EVM ${chain}] ${address}`);
         try {
           const provider = getProvider(chain);
+
           let signer;
-          if (state.walletType === 'mnemonic') signer = entry.wallet.connect(provider);
-          else signer = await state.wallet.getEthersSigner(provider);
+          if (state.walletType === 'mnemonic') {
+            signer = entry.wallet.connect(provider);
+          } else if (state.walletType === 'extension') {
+            // Ask the extension to switch to this chain before signing
+            const cfg = EVM_CHAINS[chain];
+            if (state.wallet.switchChain) {
+              await state.wallet.switchChain(cfg.chainId);
+            }
+            signer = await state.wallet.getEthersSigner(provider);
+          } else {
+            signer = await state.wallet.getEthersSigner(provider);
+          }
 
           const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
           const tokens = preview?.tokens || [];
