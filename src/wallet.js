@@ -60,9 +60,9 @@ export class MnemonicWallet {
 // =====================================================================
 
 export class BrowserExtensionBackend {
-  constructor(ethersProvider, address, chainId) {
-    this.provider = ethersProvider;   // ethers.BrowserProvider wrapping window.ethereum
-    this.rawProvider = ethersProvider.provider; // the EIP-1193 provider
+  constructor(ethersProvider, rawProvider, address, chainId) {
+    this.provider = ethersProvider;      // ethers.BrowserProvider wrapping window.ethereum
+    this.rawProvider = rawProvider;      // the raw EIP-1193 provider (window.ethereum)
     this.address = address;
     this.chainId = chainId;
   }
@@ -139,7 +139,9 @@ export async function connectBrowserExtension() {
   // Wrap in ethers
   const ethersProvider = new ethers.BrowserProvider(target);
 
-  return new BrowserExtensionBackend(ethersProvider, address, chainId);
+  // Pass the raw target provider explicitly — this is the EIP-1193 object
+  // (window.ethereum or one of its sub-providers) that has .request().
+  return new BrowserExtensionBackend(ethersProvider, target, address, chainId);
 }
 
 // =====================================================================
@@ -273,6 +275,8 @@ export class LedgerBackend {
 
         const sig = await ethApp.signTransaction(path, unsignedHex);
 
+        // Normalize `v`: Ledger may return 27 or 28 (legacy EIP-155 yParity)
+        // even for EIP-1559 transactions, where ethers expects 0 or 1.
         let v = parseInt(sig.v, 16);
         if (v >= 27) v -= 27;
 
