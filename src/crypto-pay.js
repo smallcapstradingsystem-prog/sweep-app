@@ -7,10 +7,10 @@ import { requestCryptoQuote, pollCryptoPayment } from './credits.js';
 import { el } from './ui.js';
 
 const BUNDLES = [
-  { id: 'single',  label: '1 credit',  price: '$5',  hint: '$5.00 per sweep' },
-  { id: 'pack-5',  label: '5 credits', price: '$20', hint: '$4.00 per sweep' },
-  { id: 'pack-10', label: '10 credits',price: '$40', hint: '$4.00 per sweep' },
-  { id: 'pack-25', label: '25 credits',price: '$80', hint: '$3.20 per sweep', badge: 'Best value' },
+  { id: 'pack-5',  label: '5 credits',  price: '$20',  hint: '$4.00 per sweep' },
+  { id: 'pack-10', label: '10 credits', price: '$40',  hint: '$4.00 per sweep' },
+  { id: 'pack-25', label: '25 credits', price: '$80',  hint: '$3.20 per sweep', badge: 'Best value' },
+  { id: 'pack-50', label: '50 credits', price: '$150', hint: '$3.00 per sweep' },
 ];
 
 const METHODS = [

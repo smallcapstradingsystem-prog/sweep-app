@@ -260,7 +260,7 @@ async function runPreview() {
 async function requirePayment() {
   track.paymentStarted('crypto');
   try {
-    const result = await showCryptoPaymentModal('single');
+    const result = await showCryptoPaymentModal('pack-5');
     track.paymentCompleted('crypto');
     return result;
   } catch (err) {
