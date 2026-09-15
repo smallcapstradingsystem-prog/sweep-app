@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sweep App — Consolidate Any Wallet Into USDC</title>
-    <meta name="description" content="Non-custodial cross-chain wallet sweeper. Pay per sweep.">
+    <meta name="description" content="Non-custodial cross-chain wallet sweeper. Your keys never leave your browser.">
     <link rel="stylesheet" href="styles.css">
-    <script defer data-domain="sweep.yourdomain.com" src="https://plausible.io/js/script.js"></script>
 </head>
 <body>
     <nav class="nav">
@@ -24,7 +23,7 @@
         <h1 style="margin-bottom: 8px;">Launch App</h1>
         <p class="hint" style="margin-bottom: 32px;">
             Everything runs in your browser. No server sees your keys.
-            <strong>$5 per live sweep</strong> — dry runs are always free.
+            <strong>Dry runs are free</strong> — credits are only used on live sweeps.
         </p>
 
         <div class="alert alert-warn">
@@ -42,6 +41,7 @@
                 <label><input type="radio" name="wallet-type" value="trezor"> Trezor</label>
             </div>
 
+            <!-- Mnemonic -->
             <div id="wallet-mnemonic" class="wallet-section">
                 <p class="hint" style="margin-top: 16px;">One mnemonic per line. BIP-39 (12 or 24 words).</p>
                 <textarea
@@ -56,15 +56,18 @@
                 <p class="hint">Supports EVM + Solana + Bitcoin derivations from the same phrase.</p>
             </div>
 
+            <!-- WalletConnect -->
             <div id="wallet-walletconnect" class="wallet-section" style="display:none;">
-                <p class="hint" style="margin-top: 16px;">Scan the QR with your mobile wallet.</p>
+                <p class="hint" style="margin-top: 16px;">Scan the QR with your mobile wallet, or approve in your browser extension.</p>
                 <button id="connect-button" class="btn btn-primary">Connect WalletConnect</button>
                 <div id="wc-qr" style="margin-top:16px;"></div>
                 <p class="hint" style="margin-top: 12px;">
                     <strong>Note:</strong> WalletConnect supports EVM chains only.
+                    Solana and Bitcoin sweeping require a mnemonic.
                 </p>
             </div>
 
+            <!-- Ledger -->
             <div id="wallet-ledger" class="wallet-section" style="display:none;">
                 <p class="hint" style="margin-top: 16px;">
                     Connect your Ledger, open the Ethereum app, then click Connect.
@@ -76,14 +79,18 @@
                 </p>
             </div>
 
+            <!-- Trezor -->
             <div id="wallet-trezor" class="wallet-section" style="display:none;">
-                <p class="hint" style="margin-top: 16px;">Connect your Trezor, then click Connect.</p>
+                <p class="hint" style="margin-top: 16px;">
+                    Connect your Trezor, then click Connect. A Trezor popup will appear for approval.
+                </p>
                 <button id="connect-button" class="btn btn-primary">Connect Trezor</button>
                 <p class="hint" style="margin-top:12px;">
                     <strong>Note:</strong> Hardware wallets currently support EVM chains only.
                 </p>
             </div>
 
+            <!-- Connected banner -->
             <div id="connected-banner" style="display:none; margin-top:16px; padding:12px 16px; background:rgba(35,134,54,0.1); border-left:3px solid #238636; border-radius:4px;">
                 <strong>Connected:</strong> <code id="connected-address"></code>
             </div>
@@ -113,7 +120,23 @@
             <h2 style="margin-top:32px;">4. Mode</h2>
             <div class="checks">
                 <label><input type="radio" name="mode" value="dry-run" checked> Dry run (free, nothing broadcast)</label>
-                <label><input type="radio" name="mode" value="live"> Live ($5, broadcasts real transactions)</label>
+                <label><input type="radio" name="mode" value="live"> Live (uses 1 credit, broadcasts real transactions)</label>
+            </div>
+
+            <!-- Live mode warning: informational only. Appears when Live is selected.
+                 Does NOT block, delay, or interfere with the payment flow. -->
+            <div id="live-warning" class="alert alert-warn" style="display:none; margin-top:16px;">
+                <strong>⚠ Before running a live sweep:</strong>
+                <ul style="margin: 8px 0 0 0; padding-left: 0; font-size: 14px; line-height: 1.7; list-style: none;">
+                    <li>Make sure each wallet has enough native gas:</li>
+                    <li style="padding-left: 20px; color: #8b949e; font-size: 13px; margin-top: 4px;">
+                        Ethereum mainnet: <strong>~0.005 ETH</strong><br>
+                        Base / Arbitrum / Optimism: <strong>~0.0002 ETH</strong><br>
+                        Polygon: <strong>~0.5 POL</strong>
+                    </li>
+                    <li style="margin-top: 8px;">Wallets without gas will fail on that chain.</li>
+                    <li>Credits are consumed whether or not the sweep succeeds.</li>
+                </ul>
             </div>
 
             <div class="actions">
@@ -126,6 +149,17 @@
         <section class="card">
             <h2>Output</h2>
             <pre id="run-log"></pre>
+        </section>
+
+        <section class="card">
+            <h2>How it works</h2>
+            <ol style="padding-left: 24px; color: #8b949e; font-size: 14px; line-height: 1.8;">
+                <li>Pick a wallet source and provide its credentials.</li>
+                <li>Click <strong>Preview</strong> to derive addresses and see what's in each wallet.</li>
+                <li>Review the preview. Nothing has been broadcast.</li>
+                <li>Click <strong>Run</strong> to execute. Every transaction is signed locally.</li>
+                <li>Your USDC arrives at the destination address.</li>
+            </ol>
         </section>
     </main>
 

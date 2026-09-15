@@ -277,10 +277,17 @@ async function runSweep(live) {
 
   // ---- PAYMENT GATE (only for live) ----
   if (live) {
+    // Log-only gas reminder. Does not block.
+    logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
+    logLine('  Ethereum mainnet: ~0.005 ETH');
+    logLine('  Base / Arbitrum / Optimism: ~0.0002 ETH');
+    logLine('  Polygon: ~0.5 POL');
+    logLine('Wallets without gas will fail on that chain, and the credit is still consumed.\n');
+
     let balance = await fetchBalance();
 
     if (balance < 1) {
-      logLine('\nNo credits available. Opening payment modal...');
+      logLine('No credits available. Opening payment modal...');
       try {
         await requirePayment();
         balance = await fetchBalance({ force: true });
@@ -302,7 +309,6 @@ async function runSweep(live) {
       return;
     }
 
-    // Consume the credit
     try {
       const newBalance = await consumeCredit('sweep');
       logLine(`Credit consumed. Remaining: ${newBalance}`);
@@ -459,6 +465,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (runBtn) {
         runBtn.textContent = state.mode === 'live' ? '⚡ EXECUTE LIVE SWEEP' : '▶ Run Dry Run';
         runBtn.className = state.mode === 'live' ? 'btn btn-danger' : 'btn btn-primary';
+      }
+      const warning = $('#live-warning');
+      if (warning) {
+        warning.style.display = state.mode === 'live' ? '' : 'none';
       }
     });
   });
