@@ -86,7 +86,6 @@ const ERC20_ABI = [
 const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 
 // Struct fields are NAMED here so ethers v6 accepts object-form calls.
-// Without the names, ethers throws "cannot use object value with unnamed components".
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
 ];
@@ -210,10 +209,24 @@ async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   return best;
 }
 
+/**
+ * Ensure the router has permission to spend this token.
+ *
+ * Approves to MaxUint256 rather than the exact amount. This means the
+ * very first sweep of a given token costs one extra approve tx, but
+ * every subsequent sweep skips the approve step entirely.
+ *
+ * Trade-off: the router is approved to spend an unlimited amount of
+ * this token from this wallet. That's standard practice for DEX
+ * interfaces (Uniswap, 1inch, and every major frontend do the same).
+ * The alternative — approving exactly what's needed — saves nothing
+ * meaningful and costs an extra tx on every sweep.
+ */
 async function ensureApproval(tokenContract, owner, spender, amount, signer) {
   const allowance = await tokenContract.allowance(owner, spender);
   if (allowance >= amount) return null;
-  return await tokenContract.connect(signer).approve(spender, amount);
+  // Approve max — future sweeps skip this step
+  return await tokenContract.connect(signer).approve(spender, ethers.MaxUint256);
 }
 
 function failureNote(failures) {
@@ -308,7 +321,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
-        // Approve first (required before the router can be simulated)
+        // Approve to max (only if not already approved)
         const approveTx = await ensureApproval(tokenContract, address, cfg.router, bal, signer);
         if (approveTx) await approveTx.wait();
 
