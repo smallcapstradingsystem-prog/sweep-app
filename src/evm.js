@@ -21,8 +21,8 @@ const EXTRA_TOKENS = {
     { address: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58', symbol: 'USDT', decimals: 6 },
   ],
   polygon: [
-    { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT',   decimals: 6 }, // native
-    { address: '0x9417669fBF23357D2774e9D4234219952D36CA5B', symbol: 'USDT.e', decimals: 6 }, // bridged
+    { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT',   decimals: 6 },
+    { address: '0x9417669fBF23357D2774e9D4234219952D36CA5B', symbol: 'USDT.e', decimals: 6 },
   ],
   base: [],
 };
@@ -33,7 +33,6 @@ const CHAINS = {
     weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
     router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
     quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    // Includes 100 (0.01%) — where USDT/USDC and other stable pairs trade on mainnet
     feeTiers: [100, 500, 3000, 10000],
     reserveMultiplier: 4n,
     baseReserveWei: ethers.parseEther('0.002'),
@@ -89,7 +88,6 @@ const QUOTER_ABI = ['function quoteExactInputSingle((address,address,uint256,uin
 const ROUTER_ABI = ['function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)'];
 
 // Skip swaps whose quoted USDC output is below this threshold (in USDC, 6 decimals).
-// Prevents wasting gas on dust tokens that aren't worth swapping.
 const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
 
 const providerCache = {};
@@ -101,10 +99,6 @@ export function getProvider(chain) {
   return providerCache[chain];
 }
 
-/**
- * Compute the reserve we must keep in a wallet for gas.
- * max(baseReserveWei, gasPrice * 300k * reserveMultiplier).
- */
 async function computeReserve(chain, provider) {
   const cfg = CHAINS[chain];
   const feeData = await provider.getFeeData();
@@ -185,10 +179,6 @@ export async function previewWallet(chain, walletAddress) {
   return result;
 }
 
-/**
- * Try every fee tier and return the best quote found.
- * On total failure, stashes per-tier reasons on findBestQuote.lastFailures.
- */
 async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   let best = null;
   const failures = [];
@@ -219,12 +209,42 @@ async function ensureApproval(tokenContract, owner, spender, amount, signer) {
   return await tokenContract.connect(signer).approve(spender, amount);
 }
 
-/**
- * Helper: format failure reasons for a NO_ROUTE note.
- */
 function failureNote(failures) {
   if (!failures || failures.length === 0) return null;
   return failures.map((f) => `${f.fee / 10000}%: ${f.reason}`).join('; ');
+}
+
+/**
+ * Simulate a swap via staticCall before signing.
+ *
+ * This catches:
+ *   - Fee-on-transfer tokens (transfer amount mismatch → revert)
+ *   - Rebasing tokens (balance changed between quote and swap → revert)
+ *   - Honeypots (transfer blocked → revert)
+ *   - Whitelisted/restricted tokens (transfer restricted → revert)
+ *
+ * Returns { ok: true } if the swap would succeed, or
+ *         { ok: false, reason: '...' } if it would revert.
+ *
+ * The simulation is cheap (no gas, no tx) and runs against the current
+ * state of the chain. It's the same check Uniswap's own UI does before
+ * prompting you to sign.
+ */
+async function simulateSwap(router, params, signer) {
+  try {
+    await router.connect(signer).exactInputSingle.staticCall(params);
+    return { ok: true };
+  } catch (e) {
+    const msg = e.message || String(e);
+    if (msg.includes('STF')) return { ok: false, reason: 'transfer restricted or fee-on-transfer' };
+    if (msg.includes('Too little received')) return { ok: false, reason: 'slippage exceeded' };
+    if (msg.includes('TransferHelper')) return { ok: false, reason: 'token transfer rejected' };
+    if (msg.includes('SafeERC20')) return { ok: false, reason: 'token transfer rejected' };
+    if (msg.includes('balance')) return { ok: false, reason: 'insufficient balance' };
+    if (msg.includes('allowance')) return { ok: false, reason: 'approval missing' };
+    if (msg.includes('reverted')) return { ok: false, reason: 'swap would revert' };
+    return { ok: false, reason: shortError(e) };
+  }
 }
 
 export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
@@ -263,6 +283,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         const tokenContract = new ethers.Contract(token.address, ERC20_ABI, signer);
         const bal = await tokenContract.balanceOf(address);
         if (bal === 0n) continue;
+
         const best = await findBestQuote(quoter, token.address, usdc, bal, cfg.feeTiers);
         if (!best) {
           results.swaps.push({
@@ -273,8 +294,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
-        // Skip dust: don't waste gas swapping tokens worth less than MIN_SWAP_VALUE_USDC.
-        // Dry runs still report the quote so users can see what's below the threshold.
+        // Dust skip
         if (best.out < MIN_SWAP_VALUE_USDC) {
           results.swaps.push({
             symbol: token.symbol,
@@ -285,16 +305,61 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         }
 
         const minOut = best.out - (best.out * slippageBps) / 10000n;
+
         if (dryRun) {
-          results.swaps.push({ symbol: token.symbol, amountIn: ethers.formatUnits(bal, token.decimals), amountOutExpected: ethers.formatUnits(best.out, 6), amountOutMinimum: ethers.formatUnits(minOut, 6), feeTier: best.fee, status: 'DRY_RUN' });
+          results.swaps.push({
+            symbol: token.symbol,
+            amountIn: ethers.formatUnits(bal, token.decimals),
+            amountOutExpected: ethers.formatUnits(best.out, 6),
+            amountOutMinimum: ethers.formatUnits(minOut, 6),
+            feeTier: best.fee,
+            status: 'DRY_RUN',
+          });
           continue;
         }
+
+        // ---- PRE-FLIGHT SIMULATION ----
+        // Before spending gas on approve + swap, check that the swap
+        // would actually succeed. Catches fee-on-transfer, honeypots,
+        // rebasing, and restricted tokens.
+        const simParams = {
+          tokenIn: token.address,
+          tokenOut: usdc,
+          fee: best.fee,
+          recipient: destination,
+          amountIn: bal,
+          amountOutMinimum: minOut,
+          sqrtPriceLimitX96: 0,
+        };
+
+        // For the simulation to be meaningful, the router must be able to
+        // pull the token — which requires approval. If we haven't approved
+        // yet, we can't simulate the swap safely. So we approve first, then
+        // simulate, then swap. The approve is a sunk cost either way.
         const approveTx = await ensureApproval(tokenContract, address, cfg.router, bal, signer);
         if (approveTx) await approveTx.wait();
-        const tx = await router.exactInputSingle({ tokenIn: token.address, tokenOut: usdc, fee: best.fee, recipient: destination, amountIn: bal, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 });
+
+        const sim = await simulateSwap(router, simParams, signer);
+        if (!sim.ok) {
+          results.swaps.push({
+            symbol: token.symbol,
+            status: 'SKIPPED',
+            note: sim.reason,
+          });
+          continue;
+        }
+
+        // Simulation passed — broadcast for real
+        const tx = await router.exactInputSingle(simParams);
         const receipt = await tx.wait();
-        results.swaps.push({ symbol: token.symbol, txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
-      } catch (e) { results.swaps.push({ symbol: token.symbol, status: 'ERROR', error: shortError(e) }); }
+        results.swaps.push({
+          symbol: token.symbol,
+          txHash: tx.hash,
+          status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
+        });
+      } catch (e) {
+        results.swaps.push({ symbol: token.symbol, status: 'ERROR', error: shortError(e) });
+      }
     }
   }
 
@@ -364,9 +429,6 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   return results;
 }
 
-/**
- * Turn ugly ethers errors into one-liners.
- */
 function shortError(e) {
   const msg = e.message || String(e);
   if (msg.includes('insufficient funds')) return 'insufficient gas';
