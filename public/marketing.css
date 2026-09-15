@@ -25,6 +25,7 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* ---------- NAV ---------- */
 .nav {
     padding: 16px 0;
     border-bottom: 1px solid var(--border);
@@ -41,6 +42,7 @@ a:hover { text-decoration: underline; }
 .nav-links a { color: var(--muted); }
 .nav-links a:hover { color: var(--text); text-decoration: none; }
 
+/* ---------- BUTTONS ---------- */
 .btn {
     display: inline-block;
     padding: 10px 20px;
@@ -62,6 +64,7 @@ a:hover { text-decoration: underline; }
 .btn-secondary { background: transparent; color: var(--text); border-color: #30363d; }
 .btn-secondary:hover { border-color: var(--muted); }
 
+/* ---------- HERO ---------- */
 .hero { padding: 100px 0 80px; text-align: center; }
 .hero h1 {
     font-size: 56px;
@@ -95,6 +98,7 @@ a:hover { text-decoration: underline; }
     color: var(--muted);
 }
 
+/* ---------- SECTIONS ---------- */
 section { padding: 80px 0; }
 section h2 {
     font-size: 36px;
@@ -123,45 +127,45 @@ section .lede { text-align: center; margin-bottom: 60px; }
 .problem li { padding: 8px 0 8px 24px; position: relative; color: var(--muted); }
 .problem li:before { content: "→"; position: absolute; left: 0; color: var(--accent); }
 
-/* ---------- PROBLEM FOLLOW-UP ---------- */
-.problem-followup {
-    margin-top: 40px;
-    padding-top: 32px;
+/* ---------- PROBLEM EXTRA BLOCKS ---------- */
+.problem-extra {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    margin-top: 48px;
+    padding-top: 40px;
     border-top: 1px solid var(--border);
-    max-width: 720px;
 }
-.problem-followup p {
-    color: var(--muted);
+
+.problem-extra-block p {
     margin-bottom: 12px;
+    color: var(--muted);
     font-size: 15px;
 }
-.problem-followup p:last-child {
-    margin-top: 16px;
-    margin-bottom: 0;
-}
-.problem-followup strong {
+
+.problem-extra-block p strong {
     color: var(--text);
 }
-.problem-followup ul {
+
+.problem-extra-block ul {
     list-style: none;
     padding-left: 0;
-    margin: 12px 0;
+    margin: 0;
 }
-.problem-followup li {
+
+.problem-extra-block li {
     padding: 6px 0 6px 24px;
     position: relative;
     color: var(--muted);
     font-size: 14px;
+    line-height: 1.6;
 }
-.problem-followup li:before {
-    content: "→";
+
+.problem-extra-block li:before {
+    content: "✓";
     position: absolute;
     left: 0;
-    color: var(--accent);
-}
-.problem-followup em {
-    color: var(--text);
-    font-style: italic;
+    color: var(--primary);
 }
 
 /* ---------- HOW ---------- */
@@ -307,6 +311,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
     .hero h1 { font-size: 36px; }
     .lede { font-size: 17px; }
     .problem .two-col { grid-template-columns: 1fr; gap: 40px; }
+    .problem-extra { grid-template-columns: 1fr; gap: 32px; }
     .steps { grid-template-columns: 1fr; }
     .pricing-grid { grid-template-columns: 1fr; }
     .footer-grid { grid-template-columns: 1fr 1fr; }

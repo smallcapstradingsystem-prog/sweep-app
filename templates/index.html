@@ -55,36 +55,45 @@
             <h2>The problem</h2>
             <div class="two-col">
                 <div>
-                    <p>You have <strong>many old wallets</strong>. Each one has:</p>
+                    <p>Existing tools don't solve this:</p>
                     <ul>
-                        <li>200 USDC here</li>
-                        <li>$400 of PEPE there</li>
-                        <li>0.5 ETH on Arbitrum</li>
-                        <li>Dust you can't move because gas costs more than the dust</li>
+                        <li><strong>Revoke.cash</strong> revokes approvals, doesn't move assets</li>
+                        <li><strong>DeBank</strong> shows portfolios, doesn't act</li>
+                        <li><strong>Zerion / Rainbow</strong> work one wallet at a time</li>
                     </ul>
-                    <p>
-                        Consolidating by hand takes hours. Import each wallet,
-                        find every token, approve every swap, pay gas on every chain.
-                    </p>
+                    <p>Nobody does <em>"sweep everything to one place as USDC."</em></p>
                 </div>
                 <div>
-                    <p><strong>Use Sweep when you need to:</strong></p>
+                    <p><strong>How Sweep compares:</strong></p>
                     <ul>
-                        <li><strong>Consolidate</strong> your wallets into USDC at one address, quickly</li>
-                        <li><strong>Empty</strong> a wallet you think may be compromised</li>
-                        <li><strong>Clean up</strong> years of dust and forgotten tokens</li>
+                        <li><strong>Revoke.cash</strong> → Sweep also moves the assets</li>
+                        <li><strong>DeBank</strong> → Sweep also acts on them</li>
+                        <li><strong>Zerion / Rainbow</strong> → Sweep handles many wallets at once</li>
+                        <li><strong>Fireblocks</strong> → Sweep is consumer-priced and non-custodial</li>
                     </ul>
                 </div>
             </div>
 
-            <div class="problem-followup">
-                <p>Existing tools don't solve this:</p>
-                <ul>
-                    <li><strong>Revoke.cash</strong> revokes approvals, doesn't move assets</li>
-                    <li><strong>DeBank</strong> shows portfolios, doesn't act</li>
-                    <li><strong>Zerion / Rainbow</strong> work one wallet at a time</li>
-                </ul>
-                <p>Nobody does <em>"sweep everything to one place as USDC."</em></p>
+            <div class="problem-extra">
+                <div class="problem-extra-block">
+                    <p><strong>What Sweep adds:</strong></p>
+                    <ul>
+                        <li><strong>Every token, every chain, in one pass.</strong> Finds what you forgot and moves it all to USDC at one address.</li>
+                        <li><strong>Handles multiple wallets</strong> — not one at a time.</li>
+                        <li><strong>Sweeps fast in emergencies.</strong> If a seed may be compromised, move everything now.</li>
+                    </ul>
+                </div>
+
+                <div class="problem-extra-block">
+                    <p><strong>Non-custodial by design:</strong></p>
+                    <ul>
+                        <li>Your mnemonics never leave your browser</li>
+                        <li>Every transaction signed locally — no server holds your keys</li>
+                        <li>No account, no KYC, no email required</li>
+                        <li>Works with mnemonic, WalletConnect, Ledger, or Trezor</li>
+                        <li>Open source, MIT licensed — audit the code yourself</li>
+                    </ul>
+                </div>
             </div>
         </div>
     </section>
