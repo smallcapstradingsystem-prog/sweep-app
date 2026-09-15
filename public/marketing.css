@@ -105,6 +105,7 @@ section h2 {
 }
 section .lede { text-align: center; margin-bottom: 60px; }
 
+/* ---------- PROBLEM ---------- */
 .problem {
     background: var(--bg-card);
     border-top: 1px solid var(--border);
@@ -122,6 +123,48 @@ section .lede { text-align: center; margin-bottom: 60px; }
 .problem li { padding: 8px 0 8px 24px; position: relative; color: var(--muted); }
 .problem li:before { content: "→"; position: absolute; left: 0; color: var(--accent); }
 
+/* ---------- PROBLEM FOLLOW-UP ---------- */
+.problem-followup {
+    margin-top: 40px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    max-width: 720px;
+}
+.problem-followup p {
+    color: var(--muted);
+    margin-bottom: 12px;
+    font-size: 15px;
+}
+.problem-followup p:last-child {
+    margin-top: 16px;
+    margin-bottom: 0;
+}
+.problem-followup strong {
+    color: var(--text);
+}
+.problem-followup ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 12px 0;
+}
+.problem-followup li {
+    padding: 6px 0 6px 24px;
+    position: relative;
+    color: var(--muted);
+    font-size: 14px;
+}
+.problem-followup li:before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+}
+.problem-followup em {
+    color: var(--text);
+    font-style: italic;
+}
+
+/* ---------- HOW ---------- */
 .steps {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -211,6 +254,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
 .price-card li:before { content: "✓"; position: absolute; left: 0; color: var(--primary); }
 .pricing-note { text-align: center; color: var(--muted); font-size: 14px; margin-top: 40px; }
 
+/* ---------- FAQ ---------- */
 .faq details { border-bottom: 1px solid var(--border); padding: 20px 0; }
 .faq summary {
     cursor: pointer;
@@ -226,6 +270,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
 .faq details[open] summary:after { transform: rotate(45deg); }
 .faq details p { margin-top: 16px; color: var(--muted); font-size: 15px; max-width: 720px; }
 
+/* ---------- FINAL CTA ---------- */
 .final-cta {
     text-align: center;
     background: var(--bg-card);
@@ -235,6 +280,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
 .final-cta h2 { margin-bottom: 32px; }
 .final-cta .hint { color: var(--muted); font-size: 14px; margin-top: 16px; }
 
+/* ---------- FOOTER ---------- */
 .footer { padding: 60px 0 40px; font-size: 14px; }
 .footer-grid {
     display: grid;
