@@ -1,3 +1,4 @@
+import { getRpcUrl } from './rpc.js';
 import { Connection, PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount, getMint, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 
@@ -7,7 +8,8 @@ const JUPITER_QUOTE = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP = 'https://quote-api.jup.ag/v6/swap';
 
 export function getConnection(rpcUrl) {
-  return new Connection(rpcUrl || 'https://api.mainnet-beta.solana.com', 'confirmed');
+  const url = rpcUrl || getRpcUrl('solana');
+  return new Connection(url, 'confirmed');
 }
 
 export async function previewSolanaWallet(connection, walletAddress) {
