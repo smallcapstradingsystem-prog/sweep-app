@@ -1,6 +1,21 @@
 import { ethers } from 'ethers';
 import { getRpcUrl, discoverTokens } from './rpc.js';
 
+/**
+ * NOTE ON PERMIT2:
+ * This module swaps via SwapRouter02, which pulls tokens with the
+ * standard ERC20 `transferFrom` + `approve` flow. Permit2 (see
+ * `permit2.js`) is NOT used here.
+ *
+ * To use Permit2 for gas savings, you'd need to:
+ *   1. Migrate the router to Universal Router (different contract, different ABI)
+ *   2. Encode commands + inputs for the swap
+ *   3. Include the PERMIT2_PERMIT command in the swap tx
+ *
+ * That's a multi-day project. Until then, we use the simpler
+ * approve-to-max + swap approach (see `ensureApproval` below).
+ */
+
 const USDC_ADDRESSES = {
   ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   arbitrum: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
