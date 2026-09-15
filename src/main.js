@@ -15,7 +15,7 @@ import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 
-const WC_PROJECT_ID = 'REPLACE_WITH_YOUR_WALLETCONNECT_PROJECT_ID';
+const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
 
 // =====================================================================
 // UI HELPERS
