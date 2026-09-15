@@ -7,7 +7,7 @@ import { previewSolanaWallet, sweepSolana, getConnection } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
 import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
-import { getClientId, fetchBalance, consumeCredit, startSquareCheckout, invalidateBalanceCache } from './credits.js';
+import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
@@ -258,87 +258,14 @@ async function runPreview() {
  * Throws if the user cancels.
  */
 async function requirePayment() {
-  return new Promise(async (resolve, reject) => {
-    const modal = buildPaymentModal(async (method) => {
-      modal.remove();
-      try {
-        if (method === 'square') {
-          track.paymentStarted('square');
-          await startSquareCheckout('single');
-          // startSquareCheckout redirects, so we never get here
-        } else if (method === 'crypto') {
-          track.paymentStarted('crypto');
-          const result = await showCryptoPaymentModal('single');
-          track.paymentCompleted('crypto');
-          resolve(result);
-        }
-      } catch (err) {
-        reject(err);
-      }
-    }, () => {
-      modal.remove();
-      reject(new Error('Payment cancelled'));
-    });
-    document.body.appendChild(modal);
-  });
-}
-
-function buildPaymentModal(onPay, onCancel) {
-  const overlay = el('div', { class: 'modal-overlay' });
-  const modal = el('div', { class: 'modal' });
-
-  modal.appendChild(el('div', { class: 'modal-header' }, [
-    el('h2', { text: 'Buy a sweep credit' }),
-    el('button', { class: 'modal-close', text: '×', onclick: onCancel }),
-  ]));
-
-  const body = el('div', { class: 'modal-body' });
-
-  body.appendChild(el('p', {
-    class: 'modal-price',
-    html: `<strong>$${PRICE_PER_SWEEP}</strong> per live sweep`,
-  }));
-
-  body.appendChild(el('p', {
-    class: 'hint',
-    text: 'Dry runs are always free. You only pay when you execute a live sweep.',
-  }));
-
-  const methods = el('div', { class: 'payment-methods' });
-
-  methods.appendChild(el('button', {
-    class: 'payment-method',
-    onclick: () => onPay('square'),
-  }, [
-    el('span', { class: 'payment-icon', text: '💳' }),
-    el('div', {}, [
-      el('div', { class: 'payment-label', text: 'Pay with card' }),
-      el('div', { class: 'payment-hint', text: 'Square — Visa, Mastercard, Amex' }),
-    ]),
-  ]));
-
-  methods.appendChild(el('button', {
-    class: 'payment-method',
-    onclick: () => onPay('crypto'),
-  }, [
-    el('span', { class: 'payment-icon', text: '₿' }),
-    el('div', {}, [
-      el('div', { class: 'payment-label', text: 'Pay with crypto' }),
-      el('div', { class: 'payment-hint', text: 'USDC, ETH, SOL, or BTC' }),
-    ]),
-  ]));
-
-  body.appendChild(methods);
-
-  body.appendChild(el('p', {
-    class: 'hint',
-    style: 'margin-top: 20px; font-size: 12px;',
-    text: 'After payment, your credit is stored locally. You can use it now or save it for later.',
-  }));
-
-  modal.appendChild(body);
-  overlay.appendChild(modal);
-  return overlay;
+  track.paymentStarted('crypto');
+  try {
+    const result = await showCryptoPaymentModal('single');
+    track.paymentCompleted('crypto');
+    return result;
+  } catch (err) {
+    throw err;
+  }
 }
 
 // =====================================================================
