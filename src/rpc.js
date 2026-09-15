@@ -1,4 +1,4 @@
-const PROXY_URL = ''; // Set to your Cloudflare Worker URL to enable token discovery
+const PROXY_URL = 'https://sweep-rpc.smallcapstradingsystem.workers.dev'; // Set to your Cloudflare Worker URL to enable token discovery
 
 const PUBLIC_RPCS = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
