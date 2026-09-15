@@ -1,4 +1,4 @@
-﻿/**
+/**
  * rpc-proxy.js — Cloudflare Worker
  * =====================================================================
  * Two responsibilities:
@@ -19,6 +19,7 @@ const RPC_ENDPOINTS = {
   optimism: (env) => `https://opt-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`,
   base:     (env) => `https://base-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`,
   polygon:  (env) => `https://polygon-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`,
+  bnb:      (env) => `https://bnb-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`,
   solana:   (env) => `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_KEY}`,
 };
 
@@ -28,6 +29,7 @@ const ALCHEMY_NETWORKS = {
   optimism: 'opt-mainnet',
   base:     'base-mainnet',
   polygon:  'polygon-mainnet',
+  bnb:      'bnb-mainnet',
 };
 
 const rateLimitMap = new Map();

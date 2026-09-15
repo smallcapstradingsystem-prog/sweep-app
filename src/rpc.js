@@ -1,11 +1,9 @@
 /**
  * rpc.js — RPC client for the sweep app.
  *
- * All RPC traffic goes through the Cloudflare Worker proxy, which
- * routes to Alchemy using the ALCHEMY_KEY secret stored on the worker.
- * The Alchemy key is never present in the client bundle.
- *
- * PUBLIC_RPCS is a fallback used only when PROXY_URL is empty.
+ * Uses the Cloudflare Worker proxy when configured, falling back to
+ * PublicNode endpoints otherwise. The Alchemy key lives only on the
+ * worker, never in the client bundle.
  */
 
 const PROXY_URL = 'https://sweep-rpc.smallcapstradingsystem.workers.dev';
@@ -16,6 +14,7 @@ const PUBLIC_RPCS = {
   optimism: 'https://optimism-rpc.publicnode.com',
   base:     'https://base-rpc.publicnode.com',
   polygon:  'https://polygon-bor-rpc.publicnode.com',
+  bnb:      'https://bsc-rpc.publicnode.com',
   solana:   'https://api.mainnet-beta.solana.com',
 };
 
