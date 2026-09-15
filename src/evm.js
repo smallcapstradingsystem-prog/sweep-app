@@ -21,7 +21,8 @@ const EXTRA_TOKENS = {
     { address: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58', symbol: 'USDT', decimals: 6 },
   ],
   polygon: [
-    { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT', decimals: 6 },
+    { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT',   decimals: 6 }, // native
+    { address: '0x9417669fBF23357D2774e9D4234219952D36CA5B', symbol: 'USDT.e', decimals: 6 }, // bridged
   ],
   base: [],
 };
@@ -87,6 +88,10 @@ const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 const QUOTER_ABI = ['function quoteExactInputSingle((address,address,uint256,uint24,uint160)) returns (uint256,uint160,uint32,uint256)'];
 const ROUTER_ABI = ['function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)'];
 
+// Skip swaps whose quoted USDC output is below this threshold (in USDC, 6 decimals).
+// Prevents wasting gas on dust tokens that aren't worth swapping.
+const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
+
 const providerCache = {};
 
 export function getProvider(chain) {
@@ -98,7 +103,7 @@ export function getProvider(chain) {
 
 /**
  * Compute the reserve we must keep in a wallet for gas.
- * See earlier notes — max of hard floor and gasPrice * 300k * multiplier.
+ * max(baseReserveWei, gasPrice * 300k * reserveMultiplier).
  */
 async function computeReserve(chain, provider) {
   const cfg = CHAINS[chain];
@@ -182,11 +187,7 @@ export async function previewWallet(chain, walletAddress) {
 
 /**
  * Try every fee tier and return the best quote found.
- *
- * - Logs each failed tier with the reason, so we can see WHY a route
- *   wasn't found instead of guessing.
- * - Returns { fee, out } for the tier with the highest output, or null
- *   if every tier failed.
+ * On total failure, stashes per-tier reasons on findBestQuote.lastFailures.
  */
 async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   let best = null;
@@ -204,19 +205,11 @@ async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
       const out = q[0] ?? q.amountOut;
       if (!best || out > best.out) best = { fee, out };
     } catch (e) {
-      // Collect the failure reason so callers can log it if no tier works
       failures.push({ fee, reason: shortError(e) });
     }
   }
 
-  if (!best) {
-    // No tier produced a valid quote. Attach failures so the caller can
-    // see them if it wants. Callers that don't care can ignore this.
-    findBestQuote.lastFailures = failures;
-  } else {
-    findBestQuote.lastFailures = null;
-  }
-
+  findBestQuote.lastFailures = best ? null : failures;
   return best;
 }
 
@@ -224,6 +217,14 @@ async function ensureApproval(tokenContract, owner, spender, amount, signer) {
   const allowance = await tokenContract.allowance(owner, spender);
   if (allowance >= amount) return null;
   return await tokenContract.connect(signer).approve(spender, amount);
+}
+
+/**
+ * Helper: format failure reasons for a NO_ROUTE note.
+ */
+function failureNote(failures) {
+  if (!failures || failures.length === 0) return null;
+  return failures.map((f) => `${f.fee / 10000}%: ${f.reason}`).join('; ');
 }
 
 export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
@@ -264,18 +265,25 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         if (bal === 0n) continue;
         const best = await findBestQuote(quoter, token.address, usdc, bal, cfg.feeTiers);
         if (!best) {
-          // Include the per-tier failure reasons so the user/operator
-          // can see why no route was found.
-          const reasons = (findBestQuote.lastFailures || [])
-            .map((f) => `${f.fee / 10000}%: ${f.reason}`)
-            .join('; ');
           results.swaps.push({
             symbol: token.symbol,
             status: 'NO_ROUTE',
-            note: reasons ? `tried tiers → ${reasons}` : 'all fee tiers returned empty',
+            note: failureNote(findBestQuote.lastFailures),
           });
           continue;
         }
+
+        // Skip dust: don't waste gas swapping tokens worth less than MIN_SWAP_VALUE_USDC.
+        // Dry runs still report the quote so users can see what's below the threshold.
+        if (best.out < MIN_SWAP_VALUE_USDC) {
+          results.swaps.push({
+            symbol: token.symbol,
+            status: 'SKIPPED',
+            note: `value too low (~$${ethers.formatUnits(best.out, 6)} USDC, min $${ethers.formatUnits(MIN_SWAP_VALUE_USDC, 6)})`,
+          });
+          continue;
+        }
+
         const minOut = best.out - (best.out * slippageBps) / 10000n;
         if (dryRun) {
           results.swaps.push({ symbol: token.symbol, amountIn: ethers.formatUnits(bal, token.decimals), amountOutExpected: ethers.formatUnits(best.out, 6), amountOutMinimum: ethers.formatUnits(minOut, 6), feeTier: best.fee, status: 'DRY_RUN' });
@@ -301,10 +309,13 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
       const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
       const best = await findBestQuote(quoter, cfg.weth, usdc, nativeBal, cfg.feeTiers);
       if (!best) {
-        const reasons = (findBestQuote.lastFailures || [])
-          .map((f) => `${f.fee / 10000}%: ${f.reason}`)
-          .join('; ');
-        results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: reasons });
+        results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: failureNote(findBestQuote.lastFailures) });
+      } else if (best.out < MIN_SWAP_VALUE_USDC) {
+        results.swaps.push({
+          symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
+          status: 'SKIPPED',
+          note: `value too low (~$${ethers.formatUnits(best.out, 6)} USDC)`,
+        });
       } else {
         results.swaps.push({
           symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
@@ -321,10 +332,13 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
         const best = await findBestQuote(quoter, cfg.weth, usdc, wrapAmount, cfg.feeTiers);
         if (!best) {
-          const reasons = (findBestQuote.lastFailures || [])
-            .map((f) => `${f.fee / 10000}%: ${f.reason}`)
-            .join('; ');
-          results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: reasons });
+          results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE', note: failureNote(findBestQuote.lastFailures) });
+        } else if (best.out < MIN_SWAP_VALUE_USDC) {
+          results.swaps.push({
+            symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
+            status: 'SKIPPED',
+            note: `value too low (~$${ethers.formatUnits(best.out, 6)} USDC, min $${ethers.formatUnits(MIN_SWAP_VALUE_USDC, 6)})`,
+          });
         } else {
           const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
           const wrapTx = await weth.deposit({ value: wrapAmount });
