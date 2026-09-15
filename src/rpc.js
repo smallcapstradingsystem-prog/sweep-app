@@ -1,4 +1,14 @@
-const PROXY_URL = 'https://sweep-rpc.smallcapstradingsystem.workers.dev'; // Set to your Cloudflare Worker URL to enable token discovery
+/**
+ * rpc.js — RPC client for the sweep app.
+ *
+ * All RPC traffic goes through the Cloudflare Worker proxy, which
+ * routes to Alchemy using the ALCHEMY_KEY secret stored on the worker.
+ * The Alchemy key is never present in the client bundle.
+ *
+ * PUBLIC_RPCS is a fallback used only when PROXY_URL is empty.
+ */
+
+const PROXY_URL = 'https://sweep-rpc.smallcapstradingsystem.workers.dev';
 
 const PUBLIC_RPCS = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
@@ -9,11 +19,18 @@ const PUBLIC_RPCS = {
   solana:   'https://api.mainnet-beta.solana.com',
 };
 
-export function getProxyUrl() { return PROXY_URL; }
-export function hasProxy() { return PROXY_URL.length > 0; }
+export function getProxyUrl() {
+  return PROXY_URL;
+}
+
+export function hasProxy() {
+  return PROXY_URL.length > 0;
+}
 
 export function getRpcUrl(chain) {
-  if (PROXY_URL) return `${PROXY_URL}/rpc/${chain}`;
+  if (PROXY_URL) {
+    return `${PROXY_URL}/rpc/${chain}`;
+  }
   return PUBLIC_RPCS[chain];
 }
 
@@ -30,8 +47,14 @@ export async function jsonRpc(chain, method, params = []) {
   return json.result;
 }
 
+/**
+ * Fetch ERC-20 token holdings for a wallet address.
+ * Uses the Cloudflare proxy which calls alchemy_getTokenBalances.
+ */
 export async function discoverTokens(chain, address) {
-  if (!PROXY_URL) return [];
+  if (!PROXY_URL) {
+    return [];
+  }
   const resp = await fetch(`${PROXY_URL}/tokens/${chain}/${address}`);
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: resp.statusText }));
@@ -39,4 +62,22 @@ export async function discoverTokens(chain, address) {
   }
   const json = await resp.json();
   return json.tokens || [];
+}
+
+/**
+ * Convenience: fetch USDC's decimals from the chain.
+ */
+export async function getUsdcMetadata(chain, usdcAddress) {
+  try {
+    const result = await jsonRpc(chain, 'eth_call', [
+      {
+        to: usdcAddress,
+        data: '0x313ce567',
+      },
+      'latest',
+    ]);
+    return { decimals: parseInt(result, 16) };
+  } catch {
+    return { decimals: 6 };
+  }
 }
