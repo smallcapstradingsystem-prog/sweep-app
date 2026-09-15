@@ -256,45 +256,62 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
     }
   }
 
-  // ---- Native token → USDC (reserve-aware) ----
+  // ---- Native token → USDC ----
+  //
+  // In dry run, we ignore the reserve entirely and quote the full balance,
+  // because nothing is actually being spent. The reserve only matters when
+  // we sign transactions, which only happens in live mode.
   try {
     const nativeBal = await provider.getBalance(address);
-    const reserve = await computeReserve(chain, provider);
     const minSwap = ethers.parseEther('0.00005');
 
-    if (nativeBal > reserve + minSwap) {
-      const wrapAmount = nativeBal - reserve;
+    if (nativeBal <= minSwap) {
+      // Nothing to report
+    } else if (dryRun) {
+      // Quote the full balance — no reserve in dry run
       const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
-      const best = await findBestQuote(quoter, cfg.weth, usdc, wrapAmount, cfg.feeTiers);
+      const best = await findBestQuote(quoter, cfg.weth, usdc, nativeBal, cfg.feeTiers);
       if (!best) {
         results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE' });
-      } else if (dryRun) {
+      } else {
         results.swaps.push({
           symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
-          amountIn: ethers.formatEther(wrapAmount),
+          amountIn: ethers.formatEther(nativeBal),
           amountOutExpected: ethers.formatUnits(best.out, 6),
           feeTier: best.fee,
           status: 'DRY_RUN',
-          note: `reserve ${ethers.formatEther(reserve)} ${chain === 'polygon' ? 'POL' : 'ETH'}`,
         });
-      } else {
-        const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
-        const wrapTx = await weth.deposit({ value: wrapAmount });
-        await wrapTx.wait();
-        const approveTx = await ensureApproval(weth, address, cfg.router, wrapAmount, signer);
-        if (approveTx) await approveTx.wait();
-        const minOut = best.out - (best.out * slippageBps) / 10000n;
-        const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
-        const tx = await router.exactInputSingle({ tokenIn: cfg.weth, tokenOut: usdc, fee: best.fee, recipient: destination, amountIn: wrapAmount, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 });
-        const receipt = await tx.wait();
-        results.swaps.push({ symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH', txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
       }
-    } else if (nativeBal > 0n) {
-      results.swaps.push({
-        symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
-        status: 'SKIPPED',
-        note: `${ethers.formatEther(nativeBal)} below reserve ${ethers.formatEther(reserve)}`,
-      });
+    } else {
+      // Live: keep the reserve back for gas
+      const reserve = await computeReserve(chain, provider);
+
+      if (nativeBal > reserve + minSwap) {
+        const wrapAmount = nativeBal - reserve;
+        const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
+        const best = await findBestQuote(quoter, cfg.weth, usdc, wrapAmount, cfg.feeTiers);
+        if (!best) {
+          results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE' });
+        } else {
+          const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
+          const wrapTx = await weth.deposit({ value: wrapAmount });
+          await wrapTx.wait();
+          const approveTx = await ensureApproval(weth, address, cfg.router, wrapAmount, signer);
+          if (approveTx) await approveTx.wait();
+          const minOut = best.out - (best.out * slippageBps) / 10000n;
+          const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
+          const tx = await router.exactInputSingle({ tokenIn: cfg.weth, tokenOut: usdc, fee: best.fee, recipient: destination, amountIn: wrapAmount, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 });
+          const receipt = await tx.wait();
+          results.swaps.push({ symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH', txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
+        }
+      } else if (nativeBal > 0n) {
+        // Live only: wallet has some native but not enough above reserve
+        results.swaps.push({
+          symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
+          status: 'SKIPPED',
+          note: `${ethers.formatEther(nativeBal)} below reserve ${ethers.formatEther(reserve)}`,
+        });
+      }
     }
   } catch (e) { results.errors.push(`native: ${shortError(e)}`); }
 
