@@ -281,8 +281,7 @@ async function runSweep(live) {
     logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
     logLine('  Ethereum mainnet: ~0.005 ETH');
     logLine('  Base / Arbitrum / Optimism: ~0.0002 ETH');
-    logLine('  Polygon: ~0.5 POL');
-    logLine('Wallets without gas will fail on that chain, and the credit is still consumed.\n');
+    logLine('  Polygon: ~0.5 POL\n');
 
     let balance = await fetchBalance();
 
