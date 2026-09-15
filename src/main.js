@@ -1,8 +1,13 @@
+/**
+ * main.js — Application entry point.
+ */
+
+import { ethers } from 'ethers';
 import QRCode from 'qrcode';
 import { state, resetState, clearAll } from './state.js';
 import { createWallet } from './wallet.js';
 import { validateMnemonic, deriveAll } from './derive.js';
-import { previewWallet as previewEvm, sweepEvm, getProvider } from './evm.js';
+import { previewWallet as previewEvm, sweepEvm, getProvider, CHAINS as EVM_CHAINS } from './evm.js';
 import { previewSolanaWallet, sweepSolana, getConnection } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
 import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
@@ -10,8 +15,7 @@ import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 
-const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
-const PRICE_PER_SWEEP = 5;
+const WC_PROJECT_ID = 'REPLACE_WITH_YOUR_WALLETCONNECT_PROJECT_ID';
 
 // =====================================================================
 // UI HELPERS
@@ -70,11 +74,9 @@ function updateCreditsBadge(balance) {
   if (balance > 0) {
     badge.textContent = `${balance} credit${balance > 1 ? 's' : ''}`;
     badge.className = 'credits-badge credits-available';
-    badge.title = `${balance} sweep credit${balance > 1 ? 's' : ''} remaining`;
   } else {
     badge.textContent = 'No credits';
     badge.className = 'credits-badge credits-empty';
-    badge.title = 'Buy credits to run live sweeps';
   }
 }
 
@@ -215,7 +217,6 @@ async function runPreview() {
           logLine(`  tokens: ${p.tokens.length}`);
         } catch (e) {
           logLine(`  ERROR: ${e.message}`);
-          reportError(e, { phase: 'preview_solana' });
         }
       }
     }
@@ -229,7 +230,6 @@ async function runPreview() {
           logLine(`  utxos: ${p.utxos.length}, balance: ${p.balance} sats`);
         } catch (e) {
           logLine(`  ERROR: ${e.message}`);
-          reportError(e, { phase: 'preview_bitcoin' });
         }
       }
     }
@@ -253,10 +253,6 @@ async function runPreview() {
 // PAYMENT
 // =====================================================================
 
-/**
- * Show the payment modal and return when credits are available.
- * Throws if the user cancels.
- */
 async function requirePayment() {
   track.paymentStarted('crypto');
   try {
@@ -284,11 +280,9 @@ async function runSweep(live) {
     let balance = await fetchBalance();
 
     if (balance < 1) {
-      logLine('No credits available. Opening payment modal...');
+      logLine('\nNo credits available. Opening payment modal...');
       try {
         await requirePayment();
-        // For Square, the browser redirects and never comes back here.
-        // For crypto, showCryptoPaymentModal resolves when paid.
         balance = await fetchBalance({ force: true });
         logLine(`Payment complete. Credits: ${balance}`);
       } catch (err) {
@@ -308,7 +302,7 @@ async function runSweep(live) {
       return;
     }
 
-    // Consume the credit BEFORE sweeping
+    // Consume the credit
     try {
       const newBalance = await consumeCredit('sweep');
       logLine(`Credit consumed. Remaining: ${newBalance}`);
@@ -345,7 +339,7 @@ async function runSweep(live) {
           state.results.evm.push({ chain, address, ...r });
 
           for (const s of r.swaps) {
-            logLine(`  swap ${s.symbol}: ${s.status}${s.txHash ? ' ' + s.txHash : ''}${s.error ? ' — ' + s.error : ''}`);
+            logLine(`  swap ${s.symbol}: ${s.status}${s.txHash ? ' ' + s.txHash : ''}${s.note ? ' (' + s.note + ')' : ''}${s.error ? ' — ' + s.error : ''}`);
             if (s.status === 'SUCCESS') successes++;
             if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
           }
@@ -382,7 +376,6 @@ async function runSweep(live) {
           for (const e of r.errors) logLine(`  ERROR: ${e}`);
         } catch (e) {
           logLine(`  FATAL: ${e.message}`);
-          reportError(e, { phase: 'sweep_solana' });
         }
       }
     }
@@ -398,7 +391,6 @@ async function runSweep(live) {
           if (r.status === 'ERROR' || r.status === 'BROADCAST_ERROR') failures++;
         } catch (e) {
           logLine(`  FATAL: ${e.message}`);
-          reportError(e, { phase: 'sweep_bitcoin' });
         }
       }
     }
@@ -420,7 +412,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSentry().catch(() => {});
   initPlausible();
 
-  // Identity + credits
   getClientId();
   const balance = await fetchBalance();
   updateCreditsBadge(balance);

@@ -9,8 +9,6 @@ const USDC_ADDRESSES = {
   polygon:  '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
 };
 
-// Extra tokens hardcoded until the RPC proxy is deployed.
-// Each entry: { address, symbol, decimals }
 const EXTRA_TOKENS = {
   ethereum: [
     { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 6 },
@@ -25,17 +23,55 @@ const EXTRA_TOKENS = {
   polygon: [
     { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT', decimals: 6 },
   ],
-  base: [
-    // Base has no canonical USDT — leave empty
-  ],
+  base: [],
 };
 
 const CHAINS = {
-  ethereum: { name: 'Ethereum', chainId: 1, weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', feeTiers: [500, 3000, 10000] },
-  arbitrum: { name: 'Arbitrum', chainId: 42161, weth: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', feeTiers: [100, 500, 3000] },
-  optimism: { name: 'Optimism', chainId: 10, weth: '0x4200000000000000000000000000000000000006', router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', feeTiers: [100, 500, 3000] },
-  base: { name: 'Base', chainId: 8453, weth: '0x4200000000000000000000000000000000000006', router: '0x2626664c2603336E57B271c5C0b26F421741e481', quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', feeTiers: [100, 500, 3000] },
-  polygon: { name: 'Polygon', chainId: 137, weth: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', feeTiers: [100, 500, 3000] },
+  ethereum: {
+    name: 'Ethereum', chainId: 1,
+    weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+    feeTiers: [500, 3000, 10000],
+    reserveMultiplier: 4n,
+    baseReserveWei: ethers.parseEther('0.002'),
+  },
+  arbitrum: {
+    name: 'Arbitrum', chainId: 42161,
+    weth: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+    feeTiers: [100, 500, 3000],
+    reserveMultiplier: 3n,
+    baseReserveWei: ethers.parseEther('0.0001'),
+  },
+  optimism: {
+    name: 'Optimism', chainId: 10,
+    weth: '0x4200000000000000000000000000000000000006',
+    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+    feeTiers: [100, 500, 3000],
+    reserveMultiplier: 3n,
+    baseReserveWei: ethers.parseEther('0.0001'),
+  },
+  base: {
+    name: 'Base', chainId: 8453,
+    weth: '0x4200000000000000000000000000000000000006',
+    router: '0x2626664c2603336E57B271c5C0b26F421741e481',
+    quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
+    feeTiers: [100, 500, 3000],
+    reserveMultiplier: 3n,
+    baseReserveWei: ethers.parseEther('0.0001'),
+  },
+  polygon: {
+    name: 'Polygon', chainId: 137,
+    weth: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
+    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+    feeTiers: [100, 500, 3000],
+    reserveMultiplier: 3n,
+    baseReserveWei: ethers.parseEther('0.1'),
+  },
 };
 
 const ERC20_ABI = [
@@ -57,6 +93,28 @@ export function getProvider(chain) {
     providerCache[chain] = new ethers.JsonRpcProvider(getRpcUrl(chain));
   }
   return providerCache[chain];
+}
+
+/**
+ * Compute the reserve we must keep in a wallet for gas.
+ *
+ * Formula: max(baseReserveWei, gasPrice * 300k * reserveMultiplier)
+ *
+ * `baseReserveWei` is a hard floor — even at near-zero gas price, we
+ * keep this much back so subsequent transactions always have something.
+ *
+ * `reserveMultiplier` is the safety factor on top of the estimate.
+ * Ethereum mainnet uses 4x because gas can spike mid-sweep; L2s use 3x.
+ */
+async function computeReserve(chain, provider) {
+  const cfg = CHAINS[chain];
+  const feeData = await provider.getFeeData();
+  const gasPrice = feeData.gasPrice ?? ethers.parseUnits('1', 'gwei');
+
+  const estimatedCost = gasPrice * 300000n;
+  const scaled = estimatedCost * cfg.reserveMultiplier;
+
+  return scaled > cfg.baseReserveWei ? scaled : cfg.baseReserveWei;
 }
 
 export async function previewWallet(chain, walletAddress) {
@@ -82,7 +140,6 @@ export async function previewWallet(chain, walletAddress) {
     }
   } catch (e) { result.error = (result.error ? result.error + '; ' : '') + `native: ${e.message}`; }
 
-  // USDC balance
   try {
     const token = new ethers.Contract(usdc, ERC20_ABI, provider);
     const bal = await token.balanceOf(walletAddress);
@@ -91,7 +148,6 @@ export async function previewWallet(chain, walletAddress) {
     }
   } catch (e) {}
 
-  // Hardcoded extra tokens (USDT, DAI) — bypasses the proxy requirement
   const extras = EXTRA_TOKENS[chain] || [];
   for (const extra of extras) {
     try {
@@ -110,7 +166,6 @@ export async function previewWallet(chain, walletAddress) {
     } catch (e) {}
   }
 
-  // Auto-discovery via proxy (returns empty array if proxy not configured)
   try {
     const discovered = await discoverTokens(chain, walletAddress);
     for (const t of discovered) {
@@ -160,7 +215,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   const slippageBps = BigInt(opts.slippageBps ?? 100);
   const results = { chain, address, swaps: [], transfers: [], errors: [] };
 
-  // USDC transfer
+  // ---- USDC direct transfer ----
   try {
     const usdcContract = new ethers.Contract(usdc, ERC20_ABI, signer);
     const bal = await usdcContract.balanceOf(address);
@@ -173,9 +228,9 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, 6), txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
       }
     }
-  } catch (e) { results.errors.push(`USDC transfer: ${e.message}`); }
+  } catch (e) { results.errors.push(`USDC transfer: ${shortError(e)}`); }
 
-  // ERC-20 tokens (includes hardcoded USDT/DAI + discovered tokens)
+  // ---- ERC-20 tokens ----
   if (opts.tokens && opts.tokens.length > 0) {
     const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
     const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
@@ -197,17 +252,16 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         const tx = await router.exactInputSingle({ tokenIn: token.address, tokenOut: usdc, fee: best.fee, recipient: destination, amountIn: bal, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 });
         const receipt = await tx.wait();
         results.swaps.push({ symbol: token.symbol, txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
-      } catch (e) { results.swaps.push({ symbol: token.symbol, status: 'ERROR', error: e.message }); }
+      } catch (e) { results.swaps.push({ symbol: token.symbol, status: 'ERROR', error: shortError(e) }); }
     }
   }
 
-  // Native token
+  // ---- Native token → USDC (reserve-aware) ----
   try {
     const nativeBal = await provider.getBalance(address);
-    const feeData = await provider.getFeeData();
-    const gasPrice = feeData.gasPrice ?? 0n;
-    const reserve = gasPrice * 300000n;
-    const minSwap = ethers.parseEther('0.0001');
+    const reserve = await computeReserve(chain, provider);
+    const minSwap = ethers.parseEther('0.00005');
+
     if (nativeBal > reserve + minSwap) {
       const wrapAmount = nativeBal - reserve;
       const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
@@ -215,7 +269,14 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
       if (!best) {
         results.swaps.push({ symbol: 'WETH', status: 'NO_ROUTE' });
       } else if (dryRun) {
-        results.swaps.push({ symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH', amountIn: ethers.formatEther(wrapAmount), amountOutExpected: ethers.formatUnits(best.out, 6), feeTier: best.fee, status: 'DRY_RUN' });
+        results.swaps.push({
+          symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
+          amountIn: ethers.formatEther(wrapAmount),
+          amountOutExpected: ethers.formatUnits(best.out, 6),
+          feeTier: best.fee,
+          status: 'DRY_RUN',
+          note: `reserve ${ethers.formatEther(reserve)} ${chain === 'polygon' ? 'POL' : 'ETH'}`,
+        });
       } else {
         const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
         const wrapTx = await weth.deposit({ value: wrapAmount });
@@ -228,10 +289,30 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
         const receipt = await tx.wait();
         results.swaps.push({ symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH', txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
       }
+    } else if (nativeBal > 0n) {
+      results.swaps.push({
+        symbol: cfg.name === 'Polygon' ? 'WPOL' : 'WETH',
+        status: 'SKIPPED',
+        note: `${ethers.formatEther(nativeBal)} below reserve ${ethers.formatEther(reserve)}`,
+      });
     }
-  } catch (e) { results.errors.push(`native: ${e.message}`); }
+  } catch (e) { results.errors.push(`native: ${shortError(e)}`); }
 
   return results;
+}
+
+/**
+ * Turn ugly ethers errors into one-liners.
+ */
+function shortError(e) {
+  const msg = e.message || String(e);
+  if (msg.includes('insufficient funds')) return 'insufficient gas';
+  if (msg.includes('user rejected')) return 'rejected';
+  if (msg.includes('nonce has already been used')) return 'nonce conflict';
+  if (msg.includes('replacement transaction underpriced')) return 'nonce conflict';
+  if (msg.includes('CALL_EXCEPTION')) return 'call reverted (no route or slippage)';
+  if (msg.includes('could not detect network')) return 'RPC unreachable';
+  return msg.length > 120 ? msg.slice(0, 120) + '...' : msg;
 }
 
 export { CHAINS, USDC_ADDRESSES, ERC20_ABI };
