@@ -348,11 +348,17 @@ async function runSweep(live) {
           if (state.walletType === 'mnemonic') {
             signer = entry.wallet.connect(provider);
           } else if (state.walletType === 'extension') {
-            // Ask the extension to switch to this chain before signing
+            // Ask the extension to switch to this chain, then create a
+            // fresh signer bound to the extension's new chain.
             const cfg = EVM_CHAINS[chain];
-            if (state.wallet.switchChain) {
+            try {
               await state.wallet.switchChain(cfg.chainId);
+            } catch (e) {
+              logLine(`  SKIPPED: could not switch wallet to ${chain} (${e.message})`);
+              continue;
             }
+            // Small delay — some wallets need a moment to settle after a switch
+            await new Promise((r) => setTimeout(r, 300));
             signer = await state.wallet.getEthersSigner(provider);
           } else {
             signer = await state.wallet.getEthersSigner(provider);

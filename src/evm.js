@@ -1,21 +1,6 @@
 import { ethers } from 'ethers';
 import { getRpcUrl, discoverTokens } from './rpc.js';
 
-/**
- * NOTE ON PERMIT2:
- * This module swaps via SwapRouter02, which pulls tokens with the
- * standard ERC20 `transferFrom` + `approve` flow. Permit2 (see
- * `permit2.js`) is NOT used here.
- *
- * To use Permit2 for gas savings, you'd need to:
- *   1. Migrate the router to Universal Router (different contract, different ABI)
- *   2. Encode commands + inputs for the swap
- *   3. Include the PERMIT2_PERMIT command in the swap tx
- *
- * That's a multi-day project. Until then, we use the simpler
- * approve-to-max + swap approach (see `ensureApproval` below).
- */
-
 const USDC_ADDRESSES = {
   ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   arbitrum: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
@@ -100,7 +85,6 @@ const ERC20_ABI = [
 ];
 const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 
-// Struct fields are NAMED here so ethers v6 accepts object-form calls.
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
 ];
@@ -224,23 +208,9 @@ async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   return best;
 }
 
-/**
- * Ensure the router has permission to spend this token.
- *
- * Approves to MaxUint256 rather than the exact amount. This means the
- * very first sweep of a given token costs one extra approve tx, but
- * every subsequent sweep skips the approve step entirely.
- *
- * Trade-off: the router is approved to spend an unlimited amount of
- * this token from this wallet. That's standard practice for DEX
- * interfaces (Uniswap, 1inch, and every major frontend do the same).
- * The alternative — approving exactly what's needed — saves nothing
- * meaningful and costs an extra tx on every sweep.
- */
 async function ensureApproval(tokenContract, owner, spender, amount, signer) {
   const allowance = await tokenContract.allowance(owner, spender);
   if (allowance >= amount) return null;
-  // Approve max — future sweeps skip this step
   return await tokenContract.connect(signer).approve(spender, ethers.MaxUint256);
 }
 
@@ -278,14 +248,17 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   const results = { chain, address, swaps: [], transfers: [], errors: [] };
 
   // ---- USDC direct transfer ----
+  // Reads use `provider` (static RPC — always on the right chain).
+  // Writes use `signer` (extension / WC / mnemonic — signer's chain).
   try {
-    const usdcContract = new ethers.Contract(usdc, ERC20_ABI, signer);
-    const bal = await usdcContract.balanceOf(address);
+    const usdcRead = new ethers.Contract(usdc, ERC20_ABI, provider);
+    const bal = await usdcRead.balanceOf(address);
     if (bal > 0n) {
       if (dryRun) {
         results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, 6), status: 'DRY_RUN' });
       } else {
-        const tx = await usdcContract.transfer(destination, bal);
+        const usdcWrite = new ethers.Contract(usdc, ERC20_ABI, signer);
+        const tx = await usdcWrite.transfer(destination, bal);
         const receipt = await tx.wait();
         results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, 6), txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
       }
@@ -295,12 +268,14 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   // ---- ERC-20 tokens ----
   if (opts.tokens && opts.tokens.length > 0) {
     const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
+    const routerRead = new ethers.Contract(cfg.router, ROUTER_ABI, provider);
     const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
     for (const token of opts.tokens) {
       if (token.address.toLowerCase() === usdc.toLowerCase()) continue;
       try {
-        const tokenContract = new ethers.Contract(token.address, ERC20_ABI, signer);
-        const bal = await tokenContract.balanceOf(address);
+        // Read balance via provider
+        const tokenRead = new ethers.Contract(token.address, ERC20_ABI, provider);
+        const bal = await tokenRead.balanceOf(address);
         if (bal === 0n) continue;
 
         const best = await findBestQuote(quoter, token.address, usdc, bal, cfg.feeTiers);
@@ -336,11 +311,11 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
-        // Approve to max (only if not already approved)
-        const approveTx = await ensureApproval(tokenContract, address, cfg.router, bal, signer);
+        // Writes: approve + swap via signer
+        const tokenWrite = new ethers.Contract(token.address, ERC20_ABI, signer);
+        const approveTx = await ensureApproval(tokenWrite, address, cfg.router, bal, signer);
         if (approveTx) await approveTx.wait();
 
-        // Pre-flight simulation
         const simParams = {
           tokenIn: token.address,
           tokenOut: usdc,
@@ -351,7 +326,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           sqrtPriceLimitX96: 0,
         };
 
-        const sim = await simulateSwap(router, simParams, signer);
+        const sim = await simulateSwap(routerRead, simParams, signer);
         if (!sim.ok) {
           results.swaps.push({ symbol: token.symbol, status: 'SKIPPED', note: sim.reason });
           continue;
