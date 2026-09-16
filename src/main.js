@@ -26,8 +26,7 @@ import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recordFee, requestGasSponsorship } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 import {
-  userShare, operatorFee,
-  FEE_WALLET_EVM, FEE_WALLET_BITCOIN,
+  FEE_WALLET_EVM, FEE_WALLET_SOLANA, FEE_WALLET_BITCOIN,
   GAS_SPONSOR_ADDRESS, GAS_PER_TX_COST, MAX_SPONSOR_ATTEMPTS,
   computeSponsorshipFeeUsdCents, usdCentsToUsdcRaw,
 } from './config.js';
@@ -423,9 +422,9 @@ async function runSweep(live) {
   const families = inputs.families;
 
   if (live) {
-    logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
-    logLine('  EVM wallets with no gas will be sponsored for a fee.');
-    logLine('  Solana and Bitcoin wallets must already hold enough native gas.');
+    logLine('\n⚠ Reminder: EVM wallets with no gas will be sponsored automatically for a fee.');
+    logLine('  Solana source wallets need a small SOL balance to cover transaction fees.');
+    logLine('  Bitcoin fees are deducted from the swept UTXOs.');
 
     let balance = await fetchBalance();
     if (balance < 1) {
@@ -466,9 +465,6 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
-  // feeReceipts record ONLY the fee portion that landed at the fee wallet.
-  // The user's portion went directly to their destination during the swap
-  // and is not tracked here.
   const feeReceipts = { evm: [], solana: [], bitcoin: [] };
   const sponsoredGasByChain = {};
   const chainHadAnySuccess = {};
@@ -553,7 +549,6 @@ async function runSweep(live) {
 
             state.results.evm.push({ chain, address, ...sweepResult });
 
-            // Record only the fee portion that landed at FEE_WALLET_EVM.
             const feePortion = BigInt(sweepResult.feeReceivedRaw || '0');
             if (feePortion > 0n) {
               feeReceipts.evm.push({
@@ -601,10 +596,13 @@ async function runSweep(live) {
         const { keypair, address } = selected;
         logLine(`\n[Solana] ${address}`);
         try {
+          // Source-side fee check. Solana transactions and deBridge
+          // order rent are paid from the wallet's own SOL balance.
+          // 0.015 SOL covers one order (rent + tx fee + priority fee).
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
-          const SOL_MIN_FOR_ORDER = 30_000_000n;
+          const SOL_MIN_FOR_ORDER = 15_000_000n; // 0.015 SOL
           if (solLamports < SOL_MIN_FOR_ORDER) {
-            logLine(`  SKIPPED: needs ~0.03 SOL for deBridge order fees (has ${(Number(solLamports) / 1e9).toFixed(4)} SOL)`);
+            logLine(`  SKIPPED: source wallet needs ~0.015 SOL to cover order rent and fees (has ${(Number(solLamports) / 1e9).toFixed(4)} SOL)`);
             continue;
           }
 
@@ -614,9 +612,6 @@ async function runSweep(live) {
           });
           state.results.solana.push({ index, ...r });
 
-          // For Solana, the affiliate fee is 10% of the USDC output, held
-          // as a claimable balance. Record it for accounting; the operator
-          // claims it separately via withdrawAffiliateFee.
           const outputTotal = BigInt(r.usdcReceivedRaw || '0');
           const feePortion = (outputTotal * 1000n) / 10000n;
           if (feePortion > 0n) {
@@ -652,11 +647,8 @@ async function runSweep(live) {
           });
           state.results.bitcoin.push({ index, ...r });
 
-          // The affiliate fee was taken from the swap output at THORChain
-          // level. The expectedUsdcOut already reflects the post-fee amount
-          // the user will receive. Record the fee portion for accounting.
           const outputTotal = BigInt(r.expectedUsdcOut || '0');
-          const feePortion = (outputTotal * 1000n) / 9000n;  // user got 90%, so fee = output/9
+          const feePortion = (outputTotal * 1000n) / 9000n;
           if (feePortion > 0n) {
             feeReceipts.bitcoin.push({
               sourceAddress: address,
@@ -755,9 +747,6 @@ async function runSweep(live) {
 
       let totalUserValue = 0;
 
-      // The user's portion is not tracked in feeReceipts (it went straight
-      // to their wallet during the swap). We approximate here from the
-      // total USDC output minus the fee portion, for display only.
       for (const r of state.results.evm) {
         const total = BigInt(r.usdcReceivedRaw || '0');
         const fee = BigInt(r.feeReceivedRaw || '0');
@@ -944,8 +933,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         runBtn.textContent = state.mode === 'live' ? '⚡ EXECUTE LIVE SWEEP' : '▶ Run Dry Run';
         runBtn.className = state.mode === 'live' ? 'btn btn-danger' : 'btn btn-primary';
       }
-      const warning = $('#live-warning');
-      if (warning) { warning.style.display = state.mode === 'live' ? '' : 'none'; }
     });
   });
 

