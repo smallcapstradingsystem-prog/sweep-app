@@ -3,6 +3,7 @@
  */
 
 import { ethers } from 'ethers';
+import { PublicKey } from '@solana/web3.js';
 import QRCode from 'qrcode';
 import { state, resetState, clearAll } from './state.js';
 import { createWallet } from './wallet.js';
@@ -14,7 +15,7 @@ import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recordFee } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
-import { userShare, operatorFee, FEE_WALLET_EVM } from './config.js';
+import { userShare, operatorFee, FEE_WALLET_EVM, FEE_WALLET_SOLANA, FEE_WALLET_BITCOIN } from './config.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
 
@@ -543,22 +544,116 @@ async function runSweep(live) {
 
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
+        // =================================================================
+    // FEE WALLET GAS CHECK (all chains)
     // =================================================================
-    // FEE WALLET GAS WARNING
+    // Before you try to forward 90% to the user, every fee wallet that
+    // received funds needs enough native gas to send its own outbound
+    // transaction. This block checks every chain the user swept and
+    // prints a clear "OK" or "LOW" status per chain.
+    //
+    // It's a best-effort check: if an RPC call fails, we skip that chain
+    // silently rather than crash the sweep summary.
+    //
+    // Thresholds (very conservative — a single forward costs much less):
+    //   Ethereum mainnet:  0.002 ETH   (~$6,   expensive chain)
+    //   Base / Arb / OP:   0.0001 ETH  (~$0.30)
+    //   Polygon:           0.05 POL    (~$0.02)
+    //   BNB Chain:         0.0005 BNB  (~$0.30)
+    //   Solana:            0.001 SOL   (~$0.20)
+    //   Bitcoin:           0.00001 BTC (~$0.60)
     // =================================================================
-    // Warn if the EVM fee wallet is low on gas and might fail when the
-    // operator tries to forward the 90% afterward.
-    if (live && Object.keys(feeReceipts.evm).length > 0) {
-      try {
-        const baseProvider = getProvider('base');
-        const feeBalance = await baseProvider.getBalance(FEE_WALLET_EVM);
-        const minGas = ethers.parseEther('0.0001');
-        if (feeBalance < minGas) {
-          logLine(`\n⚠ WARNING: Fee wallet is low on Base gas (${ethers.formatEther(feeBalance)} ETH).`);
-          logLine(`   Top up ${FEE_WALLET_EVM} on Base before forwarding 90% to users.`);
+    if (live) {
+      const gasThresholds = {
+        ethereum: ethers.parseEther('0.002'),
+        arbitrum: ethers.parseEther('0.0001'),
+        optimism: ethers.parseEther('0.0001'),
+        base:     ethers.parseEther('0.0001'),
+        polygon:  ethers.parseEther('0.05'),
+        bnb:      ethers.parseEther('0.0005'),
+      };
+
+      const evmChainsToCheck = Object.keys(feeReceipts.evm);
+      const needsSolanaCheck = feeReceipts.solana > 0n;
+      const needsBitcoinCheck = feeReceipts.bitcoin > 0n;
+
+      if (evmChainsToCheck.length > 0 || needsSolanaCheck || needsBitcoinCheck) {
+        logLine('\n═══════════════════════════════════════════════════════════');
+        logLine('FEE WALLET GAS CHECK');
+        logLine('═══════════════════════════════════════════════════════════');
+        logLine('Each fee wallet needs native gas to forward the 90% to the');
+        logLine('user. Status below:');
+        logLine('');
+
+        // ---- EVM chains ----
+        for (const chain of evmChainsToCheck) {
+          try {
+            const provider = getProvider(chain);
+            const balance = await provider.getBalance(FEE_WALLET_EVM);
+            const threshold = gasThresholds[chain] || ethers.parseEther('0.0001');
+            const symbol = chain === 'polygon' ? 'POL' : chain === 'bnb' ? 'BNB' : 'ETH';
+            const formatted = ethers.formatEther(balance);
+            const thresholdFormatted = ethers.formatEther(threshold);
+
+            if (balance < threshold) {
+              logLine(`  ⚠ LOW   ${chain.padEnd(10)} ${formatted} ${symbol} (need ~${thresholdFormatted})`);
+            } else {
+              logLine(`  ✓ OK    ${chain.padEnd(10)} ${formatted} ${symbol}`);
+            }
+          } catch (e) {
+            logLine(`  ? SKIP  ${chain.padEnd(10)} (could not read balance: ${e.message.slice(0, 60)})`);
+          }
         }
-      } catch (e) {
-        // ignore — this is a best-effort warning
+
+        // ---- Solana ----
+        if (needsSolanaCheck) {
+          try {
+            const conn = getConnection();
+            const feeOwner = new PublicKey(FEE_WALLET_SOLANA);
+            const lamports = await conn.getBalance(feeOwner);
+            const sol = lamports / 1e9;
+            const thresholdSol = 0.001;
+
+            if (sol < thresholdSol) {
+              logLine(`  ⚠ LOW   ${'solana'.padEnd(10)} ${sol.toFixed(6)} SOL (need ~${thresholdSol})`);
+            } else {
+              logLine(`  ✓ OK    ${'solana'.padEnd(10)} ${sol.toFixed(6)} SOL`);
+            }
+          } catch (e) {
+            logLine(`  ? SKIP  ${'solana'.padEnd(10)} (could not read balance: ${e.message.slice(0, 60)})`);
+          }
+        }
+
+        // ---- Bitcoin ----
+        if (needsBitcoinCheck) {
+          try {
+            const resp = await fetch(`https://mempool.space/api/address/${FEE_WALLET_BITCOIN}`);
+            if (resp.ok) {
+              const data = await resp.json();
+              const fundedSats = (data.chain_stats?.funded_txo_sum || 0)
+                               - (data.chain_stats?.spent_txo_sum || 0);
+              const btc = fundedSats / 1e8;
+              const thresholdBtc = 0.00001;
+
+              if (btc < thresholdBtc) {
+                logLine(`  ⚠ LOW   ${'bitcoin'.padEnd(10)} ${btc.toFixed(8)} BTC (need ~${thresholdBtc})`);
+              } else {
+                logLine(`  ✓ OK    ${'bitcoin'.padEnd(10)} ${btc.toFixed(8)} BTC`);
+              }
+            } else {
+              logLine(`  ? SKIP  ${'bitcoin'.padEnd(10)} (mempool.space returned ${resp.status})`);
+            }
+          } catch (e) {
+            logLine(`  ? SKIP  ${'bitcoin'.padEnd(10)} (could not read balance: ${e.message.slice(0, 60)})`);
+          }
+        }
+
+        logLine('');
+        logLine('Fee wallet addresses:');
+        logLine(`  EVM:      ${FEE_WALLET_EVM}`);
+        logLine(`  Solana:   ${FEE_WALLET_SOLANA}`);
+        logLine(`  Bitcoin:  ${FEE_WALLET_BITCOIN}`);
+        logLine('═══════════════════════════════════════════════════════════');
       }
     }
 
