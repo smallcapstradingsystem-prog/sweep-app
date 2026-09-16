@@ -14,7 +14,7 @@ import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recordFee } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
-import { userShare, operatorFee } from './config.js';
+import { userShare, operatorFee, FEE_WALLET_EVM } from './config.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
 
@@ -400,7 +400,8 @@ async function runSweep(live) {
       return;
     }
 
-    const confirm = prompt(`This live sweep will consume 1 credit (you have ${balance}). Type LIVE_SWEEP_NOW to confirm:`);
+    // Updated confirmation prompt — includes fee notice
+    const confirm = prompt(`This live sweep will consume 1 credit (you have ${balance}).\nA 10% service fee is applied to the swept value.\n\nType LIVE_SWEEP_NOW to confirm:`);
     if (confirm !== 'LIVE_SWEEP_NOW') {
       logLine('Live sweep cancelled.');
       return;
@@ -450,7 +451,8 @@ async function runSweep(live) {
               try {
                 await state.wallet.switchChain(cfg.chainId);
               } catch (e) {
-                logLine(`  SKIPPED: could not switch wallet to ${chain} (${e.message})`);
+                // Cosmetic fix: use an em-dash instead of parens to avoid double parens
+                logLine(`  SKIPPED: could not switch wallet to ${chain} — ${e.message}`);
                 continue;
               }
               await new Promise((r) => setTimeout(r, 300));
@@ -542,6 +544,25 @@ async function runSweep(live) {
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
     // =================================================================
+    // FEE WALLET GAS WARNING
+    // =================================================================
+    // Warn if the EVM fee wallet is low on gas and might fail when the
+    // operator tries to forward the 90% afterward.
+    if (live && Object.keys(feeReceipts.evm).length > 0) {
+      try {
+        const baseProvider = getProvider('base');
+        const feeBalance = await baseProvider.getBalance(FEE_WALLET_EVM);
+        const minGas = ethers.parseEther('0.0001');
+        if (feeBalance < minGas) {
+          logLine(`\n⚠ WARNING: Fee wallet is low on Base gas (${ethers.formatEther(feeBalance)} ETH).`);
+          logLine(`   Top up ${FEE_WALLET_EVM} on Base before forwarding 90% to users.`);
+        }
+      } catch (e) {
+        // ignore — this is a best-effort warning
+      }
+    }
+
+    // =================================================================
     // MANUAL FORWARD SUMMARY
     // =================================================================
     logLine('\n═══════════════════════════════════════════════════════════');
@@ -590,7 +611,7 @@ async function runSweep(live) {
     logLine('═══════════════════════════════════════════════════════════');
 
     // =================================================================
-    // RECORD FEE ON THE WORKER (live sweeps only, when something landed)
+    // RECORD FEE ON THE WORKER
     // =================================================================
     if (live && (Object.keys(feeReceipts.evm).length > 0 || feeReceipts.solana > 0n || feeReceipts.bitcoin > 0n)) {
       try {
@@ -600,36 +621,50 @@ async function runSweep(live) {
           const received = feeReceipts.evm[chain] || 0n;
           if (received === 0n) continue;
           const decimals = chain === 'bnb' ? 18 : 6;
+          // Include source wallet address for operator audit trail
+          const sourceEntry = state.derivedKeys.evm.find((e) => {
+            const preview = state.previews.evm.find((p) => p.chain === chain && p.address === e.address);
+            return !!preview;
+          });
           receipts.push({
             family: 'evm',
             chain,
+            sourceAddress: sourceEntry?.address || null,
             amountRaw: received.toString(),
             decimals,
             symbol: 'USDC',
             recipient: '0x8B180186C79D146fd5617B31A9e2A3d938954Fa9',
             userDestination: destinations.evm,
+            userShareRaw: userShare(received).toString(),
+            operatorFeeRaw: operatorFee(received).toString(),
           });
         }
 
         if (feeReceipts.solana > 0n) {
           receipts.push({
             family: 'solana',
+            sourceAddress: state.derivedKeys.solana[0]?.address || null,
             amountRaw: feeReceipts.solana.toString(),
             decimals: 6,
             symbol: 'USDC',
             recipient: '6vJg5hV5fjvmnawcvhB5ihtfdegnRjgzWuDXdYYMDzS5',
             userDestination: destinations.solana,
+            userShareRaw: userShare(feeReceipts.solana).toString(),
+            operatorFeeRaw: operatorFee(feeReceipts.solana).toString(),
           });
         }
 
         if (feeReceipts.bitcoin > 0n) {
           receipts.push({
             family: 'bitcoin',
+            sourceAddress: state.derivedKeys.bitcoin[0]?.address || null,
             amountRaw: feeReceipts.bitcoin.toString(),
             decimals: 8,
             symbol: 'BTC',
             recipient: 'bc1qcxzlxmqgxfzvduvkatd06kv4m2ch973r5gzakk',
             userDestination: destinations.bitcoin,
+            userShareRaw: userShare(feeReceipts.bitcoin).toString(),
+            operatorFeeRaw: operatorFee(feeReceipts.bitcoin).toString(),
           });
         }
 
