@@ -1,31 +1,32 @@
 /**
- * payment-worker.js — Crypto payments for Sweep
+ * payment-worker.js — Crypto payments + fee tracking for Sweeper
  * =====================================================================
- * Handles manual crypto payments: user sends to your address, worker
- * scans the chain, credits are added when the payment is confirmed.
+ * Handles:
+ *   - Crypto payments for sweep credits
+ *   - Fee receipt tracking (manual forward workflow)
  *
  * Endpoints:
- *   POST /credits/balance    — get credit balance for a client ID
- *   POST /credits/consume    — consume one credit
- *   POST /crypto/quote       — generate a payment quote (address + amount)
- *   POST /crypto/verify      — check if a payment arrived, issue credits
- *   GET  /health             — health check
+ *   POST /credits/balance          — get credit balance for a client ID
+ *   POST /credits/consume          — consume one credit
+ *   POST /crypto/quote             — generate a payment quote
+ *   POST /crypto/verify            — verify a payment arrived
+ *   POST /fee/record               — record a sweep's fee receipt (called by client)
+ *   GET  /fee/pending              — list unforwarded fee receipts
+ *   POST /fee/mark-forwarded       — mark a receipt as forwarded (called by operator)
+ *   GET  /fee/summary              — aggregate totals (called by operator)
+ *   GET  /health                   — health check
  *
  * Required secrets:
- *   CRYPTO_ADDRESS_BASE   — 0x... address on Base (also used for ETH on Base)
- *   CRYPTO_ADDRESS_ETH    — 0x... address on Ethereum
- *   CRYPTO_ADDRESS_SOL    — base58 address on Solana
- *   CRYPTO_ADDRESS_BTC    — bc1q... address on Bitcoin
- *   BASESCAN_API_KEY      — from basescan.org
- *   ETHERSCAN_API_KEY     — from etherscan.io
- *   HELIUS_API_KEY        — from helius.dev
+ *   CRYPTO_ADDRESS_BASE, CRYPTO_ADDRESS_ETH, CRYPTO_ADDRESS_SOL, CRYPTO_ADDRESS_BTC
+ *   BASESCAN_API_KEY, ETHERSCAN_API_KEY, HELIUS_API_KEY
+ *   OPERATOR_SECRET                — a shared secret for /fee/mark-forwarded and /fee/summary
  *
  * KV namespaces:
  *   CREDITS           — client_id → { balance, history }
  *   PENDING_PAYMENTS  — payment_id → { expected, address, credits, ... }
  */
 
-const PRICE_USD_CENTS = 500; // $5.00 per sweep
+const PRICE_USD_CENTS = 500;
 
 const BUNDLES = {
   'pack-1':  { credits: 1,  priceCents: 1000 },
@@ -51,7 +52,7 @@ const METHODS = {
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Operator-Secret',
 };
 
 export default {
@@ -66,18 +67,37 @@ export default {
       if (url.pathname === '/health') {
         return json({ ok: true, time: new Date().toISOString() });
       }
+
+      // ---- Credits ----
       if (url.pathname === '/credits/balance' && request.method === 'POST') {
         return await handleBalance(request, env);
       }
       if (url.pathname === '/credits/consume' && request.method === 'POST') {
         return await handleConsume(request, env);
       }
+
+      // ---- Crypto payments ----
       if (url.pathname === '/crypto/quote' && request.method === 'POST') {
         return await handleQuote(request, env);
       }
       if (url.pathname === '/crypto/verify' && request.method === 'POST') {
         return await handleVerify(request, env);
       }
+
+      // ---- Fee tracking ----
+      if (url.pathname === '/fee/record' && request.method === 'POST') {
+        return await handleFeeRecord(request, env);
+      }
+      if (url.pathname === '/fee/pending' && request.method === 'GET') {
+        return await handleFeePending(request, env);
+      }
+      if (url.pathname === '/fee/mark-forwarded' && request.method === 'POST') {
+        return await handleFeeMarkForwarded(request, env);
+      }
+      if (url.pathname === '/fee/summary' && request.method === 'GET') {
+        return await handleFeeSummary(request, env);
+      }
+
       return json({ error: 'not found' }, 404);
     } catch (err) {
       console.error('Worker error:', err);
@@ -136,7 +156,7 @@ async function addCredits(env, clientId, delta, metadata = {}) {
 // =====================================================================
 
 async function handleQuote(request, env) {
-  const { clientId, bundle = 'single', method = 'usdc-base' } = await request.json();
+  const { clientId, bundle = 'pack-5', method = 'usdc-base' } = await request.json();
 
   if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
     return json({ error: 'clientId required (min 16 chars)' }, 400);
@@ -157,7 +177,6 @@ async function handleQuote(request, env) {
   const cryptoAmount = usdAmount / rate.price;
   const cryptoAmountRaw = BigInt(Math.round(cryptoAmount * Math.pow(10, rate.decimals)));
 
-  // Add a unique 4-digit suffix so we can distinguish this payment
   const uniqueSuffix = BigInt(Math.floor(Math.random() * 10000));
   const finalRaw = cryptoAmountRaw + uniqueSuffix;
 
@@ -352,6 +371,232 @@ async function scanBitcoin(env, address, expectedRaw) {
   }
 
   return null;
+}
+
+// =====================================================================
+// FEE TRACKING
+// =====================================================================
+//
+// When a sweep completes, the client calls /fee/record with the details
+// of what landed in the fee wallets. The worker stores them in KV with
+// status "pending". The operator (you) later calls /fee/pending to see
+// what's outstanding, sends the 90% manually from the fee wallet, then
+// calls /fee/mark-forwarded to close it out.
+//
+// KV keys:
+//   fee:sweep:<sweep_id>       → full receipt JSON
+//   fee:pending                → array of sweep_ids (for fast listing)
+//   fee:forwarded:<sweep_id>   → same receipt, moved here after forwarding
+// =====================================================================
+
+/**
+ * POST /fee/record
+ * Body:
+ *   {
+ *     clientId:     string,   // the pseudonymous client ID
+ *     receipts:     [         // one entry per family/chain
+ *       {
+ *         family:    'evm' | 'solana' | 'bitcoin',
+ *         chain?:    string,   // e.g. 'base', 'arbitrum' (only for EVM)
+ *         amountRaw: string,   // raw units (wei, sats, etc.)
+ *         decimals:  number,   // 6 for USDC, 18 for BNB USDC, 8 for BTC
+ *         symbol:    string,   // 'USDC' or 'BTC'
+ *         recipient: string,   // the fee wallet address
+ *         userDestination: string, // where the 90% should go
+ *       },
+ *       ...
+ *     ],
+ *     sweepDurationMs: number,
+ *     successes:    number,
+ *     failures:     number,
+ *   }
+ */
+async function handleFeeRecord(request, env) {
+  const body = await request.json();
+  const { clientId, receipts, sweepDurationMs, successes, failures } = body;
+
+  if (!clientId) return json({ error: 'clientId required' }, 400);
+  if (!Array.isArray(receipts) || receipts.length === 0) {
+    return json({ error: 'receipts required (non-empty array)' }, 400);
+  }
+
+  const sweepId = crypto.randomUUID();
+  const record = {
+    sweepId,
+    clientId,
+    receipts,
+    sweepDurationMs: sweepDurationMs || 0,
+    successes: successes || 0,
+    failures: failures || 0,
+    status: 'pending',
+    recordedAt: new Date().toISOString(),
+    forwardedAt: null,
+    forwardedTxHashes: null,
+  };
+
+  // Store the receipt
+  await env.CREDITS.put(`fee:sweep:${sweepId}`, JSON.stringify(record));
+
+  // Append to the pending index
+  const pendingRaw = await env.CREDITS.get('fee:pending');
+  const pending = pendingRaw ? JSON.parse(pendingRaw) : [];
+  pending.unshift(sweepId);
+  await env.CREDITS.put('fee:pending', JSON.stringify(pending));
+
+  return json({ ok: true, sweepId, status: 'pending' });
+}
+
+/**
+ * GET /fee/pending
+ * Optional query params:
+ *   ?limit=N  (default 100)
+ *
+ * Returns the list of pending receipts.
+ * Requires the X-Operator-Secret header to match env.OPERATOR_SECRET.
+ */
+async function handleFeePending(request, env) {
+  requireOperator(request, env);
+
+  const url = new URL(request.url);
+  const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+
+  const pendingRaw = await env.CREDITS.get('fee:pending');
+  const pendingIds = pendingRaw ? JSON.parse(pendingRaw) : [];
+
+  const items = [];
+  for (const id of pendingIds.slice(0, limit)) {
+    const raw = await env.CREDITS.get(`fee:sweep:${id}`);
+    if (!raw) continue;
+    try {
+      items.push(JSON.parse(raw));
+    } catch {}
+  }
+
+  return json({
+    ok: true,
+    count: items.length,
+    totalPending: pendingIds.length,
+    items,
+  });
+}
+
+/**
+ * POST /fee/mark-forwarded
+ * Body:
+ *   {
+ *     sweepId: string,
+ *     txHashes: [string],   // optional — tx hashes of the 90% sends you did manually
+ *     note: string,          // optional — e.g. "sent via MetaMask"
+ *   }
+ *
+ * Marks a receipt as forwarded. Removes it from the pending index and
+ * moves it to the forwarded archive.
+ * Requires the X-Operator-Secret header.
+ */
+async function handleFeeMarkForwarded(request, env) {
+  requireOperator(request, env);
+
+  const body = await request.json();
+  const { sweepId, txHashes, note } = body;
+  if (!sweepId) return json({ error: 'sweepId required' }, 400);
+
+  const raw = await env.CREDITS.get(`fee:sweep:${sweepId}`);
+  if (!raw) return json({ error: 'sweep not found' }, 404);
+
+  const record = JSON.parse(raw);
+  if (record.status === 'forwarded') {
+    return json({ ok: true, alreadyForwarded: true, record });
+  }
+
+  record.status = 'forwarded';
+  record.forwardedAt = new Date().toISOString();
+  record.forwardedTxHashes = txHashes || null;
+  record.forwardedNote = note || null;
+
+  // Write to the forwarded archive (kept for 1 year)
+  await env.CREDITS.put(`fee:forwarded:${sweepId}`, JSON.stringify(record), {
+    expirationTtl: 60 * 60 * 24 * 365,
+  });
+
+  // Remove from pending index
+  const pendingRaw = await env.CREDITS.get('fee:pending');
+  const pending = pendingRaw ? JSON.parse(pendingRaw) : [];
+  const filtered = pending.filter((id) => id !== sweepId);
+  await env.CREDITS.put('fee:pending', JSON.stringify(filtered));
+
+  // Delete the active record (it lives in the archive now)
+  await env.CREDITS.delete(`fee:sweep:${sweepId}`);
+
+  return json({ ok: true, sweepId, status: 'forwarded', record });
+}
+
+/**
+ * GET /fee/summary
+ * Returns aggregate totals across all time:
+ *   - Total pending sweeps
+ *   - Total fee amounts pending (per family/chain)
+ *   - Total forwarded sweeps
+ *
+ * Requires X-Operator-Secret.
+ */
+async function handleFeeSummary(request, env) {
+  requireOperator(request, env);
+
+  const pendingRaw = await env.CREDITS.get('fee:pending');
+  const pendingIds = pendingRaw ? JSON.parse(pendingRaw) : [];
+
+  const totalsByChain = {};
+  let totalPendingSweeps = 0;
+
+  for (const id of pendingIds) {
+    const raw = await env.CREDITS.get(`fee:sweep:${id}`);
+    if (!raw) continue;
+    let record;
+    try { record = JSON.parse(raw); } catch { continue; }
+    totalPendingSweeps++;
+
+    for (const r of record.receipts || []) {
+      const key = r.family === 'evm' ? `evm:${r.chain}` : r.family;
+      if (!totalsByChain[key]) {
+        totalsByChain[key] = { symbol: r.symbol, decimals: r.decimals, raw: 0n, count: 0 };
+      }
+      totalsByChain[key].raw += BigInt(r.amountRaw);
+      totalsByChain[key].count += 1;
+    }
+  }
+
+  // Convert BigInt to string for JSON
+  const totals = {};
+  for (const [key, v] of Object.entries(totalsByChain)) {
+    totals[key] = {
+      symbol: v.symbol,
+      decimals: v.decimals,
+      amount: Number(v.raw) / Math.pow(10, v.decimals),
+      amountRaw: v.raw.toString(),
+      count: v.count,
+    };
+  }
+
+  return json({
+    ok: true,
+    totalPendingSweeps,
+    totals,
+  });
+}
+
+/**
+ * Verify the request carries the correct X-Operator-Secret header.
+ * Throws if not.
+ */
+function requireOperator(request, env) {
+  const provided = request.headers.get('X-Operator-Secret') || '';
+  const expected = env.OPERATOR_SECRET || '';
+  if (!expected) throw new Error('OPERATOR_SECRET not configured on the worker');
+  if (provided !== expected) {
+    const err = new Error('unauthorized');
+    err.status = 401;
+    throw err;
+  }
 }
 
 // =====================================================================

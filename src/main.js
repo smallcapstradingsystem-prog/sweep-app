@@ -12,7 +12,7 @@ import { previewSolanaWallet, sweepSolana, getConnection } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
 import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
-import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache } from './credits.js';
+import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recordFee } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 import { userShare, operatorFee } from './config.js';
 
@@ -27,12 +27,10 @@ function isEvmAddress(s) {
 }
 
 function isSolanaAddress(s) {
-  // Base58, 32-44 chars, excludes 0, O, I, l
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
 }
 
 function isBitcoinAddress(s) {
-  // Mainnet: bc1 (bech32), 1 (P2PKH), 3 (P2SH)
   if (/^bc1[a-z0-9]{39,59}$/.test(s)) return true;
   if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(s)) return true;
   return false;
@@ -114,7 +112,6 @@ function validateInputs({ walletType, families, destinations, mnemonics }) {
     }
   }
 
-  // Format mismatch warnings
   if (families.solana && destinations.solana && isEvmAddress(destinations.solana)) {
     warnings.push('Your Solana destination looks like an EVM address. If you meant to sweep Solana, please provide a Solana address.');
   }
@@ -284,7 +281,6 @@ async function runPreview() {
 
     state.previews = { evm: [], solana: [], bitcoin: [] };
 
-    // EVM previews
     if (inputs.families.evm) {
       for (const { address, index } of state.derivedKeys.evm) {
         for (const chain of state.evmChains) {
@@ -303,7 +299,6 @@ async function runPreview() {
       }
     }
 
-    // Solana previews
     if (inputs.families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
       for (const { address, index } of state.derivedKeys.solana) {
@@ -319,7 +314,6 @@ async function runPreview() {
       }
     }
 
-    // Bitcoin previews
     if (inputs.families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { address, index } of state.derivedKeys.bitcoin) {
         logLine(`\nPreviewing Bitcoin ${address}...`);
@@ -430,11 +424,10 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
-  // Tracks what landed in each fee wallet (raw units)
   const feeReceipts = {
-    evm: {},      // chain → raw USDC received
-    solana: 0n,   // raw USDC received
-    bitcoin: 0n,  // sats received
+    evm: {},
+    solana: 0n,
+    bitcoin: 0n,
   };
 
   try {
@@ -472,7 +465,6 @@ async function runSweep(live) {
             const r = await sweepEvm(chain, signer, { dryRun, tokens, slippageBps: 100 });
             state.results.evm.push({ chain, address, ...r });
 
-            // Track what landed in the fee wallet
             const chainReceived = BigInt(r.usdcReceivedRaw || '0');
             feeReceipts.evm[chain] = (feeReceipts.evm[chain] || 0n) + chainReceived;
 
@@ -559,7 +551,6 @@ async function runSweep(live) {
     logLine('user and keep 10%. Details below:');
     logLine('');
 
-    // EVM per chain
     for (const chain of state.evmChains) {
       const received = feeReceipts.evm[chain] || 0n;
       if (received === 0n) continue;
@@ -574,7 +565,6 @@ async function runSweep(live) {
       logLine('');
     }
 
-    // Solana
     if (feeReceipts.solana > 0n) {
       const userAmount = userShare(feeReceipts.solana);
       const feeAmount = operatorFee(feeReceipts.solana);
@@ -586,7 +576,6 @@ async function runSweep(live) {
       logLine('');
     }
 
-    // Bitcoin
     if (feeReceipts.bitcoin > 0n) {
       const userAmount = userShare(feeReceipts.bitcoin);
       const feeAmount = operatorFee(feeReceipts.bitcoin);
@@ -599,6 +588,67 @@ async function runSweep(live) {
     }
 
     logLine('═══════════════════════════════════════════════════════════');
+
+    // =================================================================
+    // RECORD FEE ON THE WORKER (live sweeps only, when something landed)
+    // =================================================================
+    if (live && (Object.keys(feeReceipts.evm).length > 0 || feeReceipts.solana > 0n || feeReceipts.bitcoin > 0n)) {
+      try {
+        const receipts = [];
+
+        for (const chain of state.evmChains) {
+          const received = feeReceipts.evm[chain] || 0n;
+          if (received === 0n) continue;
+          const decimals = chain === 'bnb' ? 18 : 6;
+          receipts.push({
+            family: 'evm',
+            chain,
+            amountRaw: received.toString(),
+            decimals,
+            symbol: 'USDC',
+            recipient: '0x8B180186C79D146fd5617B31A9e2A3d938954Fa9',
+            userDestination: destinations.evm,
+          });
+        }
+
+        if (feeReceipts.solana > 0n) {
+          receipts.push({
+            family: 'solana',
+            amountRaw: feeReceipts.solana.toString(),
+            decimals: 6,
+            symbol: 'USDC',
+            recipient: '6vJg5hV5fjvmnawcvhB5ihtfdegnRjgzWuDXdYYMDzS5',
+            userDestination: destinations.solana,
+          });
+        }
+
+        if (feeReceipts.bitcoin > 0n) {
+          receipts.push({
+            family: 'bitcoin',
+            amountRaw: feeReceipts.bitcoin.toString(),
+            decimals: 8,
+            symbol: 'BTC',
+            recipient: 'bc1qcxzlxmqgxfzvduvkatd06kv4m2ch973r5gzakk',
+            userDestination: destinations.bitcoin,
+          });
+        }
+
+        if (receipts.length > 0) {
+          const recorded = await recordFee({
+            receipts,
+            sweepDurationMs: Date.now() - startTime,
+            successes,
+            failures,
+          });
+
+          logLine(`\nReceipt recorded on the worker. Sweep ID: ${recorded.sweepId}`);
+          logLine(`The operator will forward 90% to the user shortly.`);
+        }
+      } catch (e) {
+        logLine(`\nWARN: could not record fee on the worker: ${e.message}`);
+        logLine(`You'll need to manually reconcile this sweep from the log above.`);
+      }
+    }
 
     track.sweepCompleted({ live, durationMs: Date.now() - startTime, successes, failures });
   } catch (e) {
@@ -620,7 +670,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const balance = await fetchBalance();
   updateCreditsBadge(balance);
 
-  // Wallet type radios
   $$('input[name=wallet-type]').forEach((radio) => {
     radio.addEventListener('change', (e) => {
       showWalletSection(e.target.value);
@@ -629,7 +678,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   showWalletSection('mnemonic');
 
-  // Family checkboxes control destination field visibility
   ['#family-evm', '#family-solana', '#family-bitcoin'].forEach((sel) => {
     const el = $(sel);
     if (el) el.addEventListener('change', syncDestinationFields);
