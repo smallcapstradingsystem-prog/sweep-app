@@ -1,14 +1,16 @@
 /**
  * rpc-proxy.js — Cloudflare Worker
  * =====================================================================
- * Two responsibilities:
+ * Three responsibilities:
  *   1. /rpc/:chain       — proxy JSON-RPC calls, hide the API key
  *   2. /tokens/:chain/:address — return ERC-20 holdings for a wallet
+ *   3. /0x/*             — proxy 0x Swap API, inject the API key
  *
  * Deploy:
  *   wrangler secret put ALCHEMY_KEY
  *   wrangler secret put HELIUS_KEY
- *   wrangler deploy -c rpc-proxy.toml
+ *   wrangler secret put ZERO_EX_API_KEY
+ *   wrangler deploy -c wrangler.toml
  *
  * No logging of payloads. Only: timestamp, IP, route, status.
  */
@@ -31,6 +33,11 @@ const ALCHEMY_NETWORKS = {
   polygon:  'polygon-mainnet',
   bnb:      'bnb-mainnet',
 };
+
+// 0x Swap API base URL. All requests are proxied through here so the
+// ZERO_EX_API_KEY never reaches the client bundle.
+const ZERO_EX_BASE = 'https://api.0x.org';
+const ZERO_EX_VERSION = 'v2';
 
 const rateLimitMap = new Map();
 const RATE_WINDOW_MS = 60_000;
@@ -80,6 +87,12 @@ export default {
       if (tokensMatch) {
         if (request.method !== 'GET') return jsonResponse({ error: 'GET required' }, 405);
         return await handleTokens(tokensMatch[1], tokensMatch[2], env, ip);
+      }
+
+      // 0x proxy: /0x/<path>?... → https://api.0x.org/<path>?...
+      const zeroExMatch = pathname.match(/^\/0x\/(.+)$/);
+      if (zeroExMatch) {
+        return await handleZeroEx(zeroExMatch[1], request, env, ip, url.search);
       }
 
       return jsonResponse({ error: 'not found' }, 404);
@@ -195,6 +208,54 @@ async function handleTokens(chain, address, env, ip) {
   }));
 
   return jsonResponse({ tokens: metadata });
+}
+
+/**
+ * Proxy a request to the 0x Swap API.
+ *
+ * The path after /0x/ is passed through verbatim (e.g. "swap/allowance-holder/quote"),
+ * and the query string is preserved. The API key is injected from the worker
+ * environment, so it never appears in client-side code or network logs.
+ *
+ * 0x v2 API expects the key in `0x-api-key` and the version in `0x-version`.
+ */
+async function handleZeroEx(subPath, request, env, ip, search) {
+  if (!env.ZERO_EX_API_KEY) {
+    return jsonResponse({ error: '0x proxy not configured' }, 503);
+  }
+
+  // Only allow safe methods — 0x quote endpoints are GET.
+  if (request.method !== 'GET') {
+    return jsonResponse({ error: 'GET required for 0x proxy' }, 405);
+  }
+
+  const target = `${ZERO_EX_BASE}/${subPath}${search}`;
+
+  const resp = await fetch(target, {
+    method: 'GET',
+    headers: {
+      '0x-api-key': env.ZERO_EX_API_KEY,
+      '0x-version': ZERO_EX_VERSION,
+      accept: 'application/json',
+    },
+  });
+
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    ip,
+    route: '0x',
+    subPath: subPath.split('/').slice(0, 3).join('/'), // e.g. "swap/allowance-holder/quote" — no query params logged
+    status: resp.status,
+  }));
+
+  const text = await resp.text();
+
+  // If 0x returned an error, surface it but keep the CORS headers so
+  // the client can read the message.
+  return new Response(text, {
+    status: resp.status,
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  });
 }
 
 function jsonResponse(data, status = 200) {

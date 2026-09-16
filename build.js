@@ -21,6 +21,7 @@ const HTML_TEMPLATES = [
   "app.html",
   "index.html",
   "checkout-complete.html",
+  "private-source.html",
 ];
 
 async function bundle() {

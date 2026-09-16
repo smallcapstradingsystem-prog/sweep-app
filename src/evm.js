@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { getRpcUrl, discoverTokens } from './rpc.js';
-import { FEE_WALLET_EVM } from './config.js';
+import { FEE_WALLET_EVM, SWAP_FEE_BPS } from './config.js';
 
 const USDC_ADDRESSES = {
   ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
@@ -37,54 +37,36 @@ const CHAINS = {
   ethereum: {
     name: 'Ethereum', chainId: 1,
     weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    feeTiers: [100, 500, 3000, 10000],
     reserveMultiplier: 4n,
     baseReserveWei: ethers.parseEther('0.002'),
   },
   arbitrum: {
     name: 'Arbitrum', chainId: 42161,
     weth: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
     baseReserveWei: ethers.parseEther('0.0001'),
   },
   optimism: {
     name: 'Optimism', chainId: 10,
     weth: '0x4200000000000000000000000000000000000006',
-    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
     baseReserveWei: ethers.parseEther('0.0001'),
   },
   base: {
     name: 'Base', chainId: 8453,
     weth: '0x4200000000000000000000000000000000000006',
-    router: '0x2626664c2603336E57B271c5C0b26F421741e481',
-    quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-    feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
     baseReserveWei: ethers.parseEther('0.0001'),
   },
   polygon: {
     name: 'Polygon', chainId: 137,
     weth: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
-    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
     baseReserveWei: ethers.parseEther('0.1'),
   },
   bnb: {
     name: 'BNB Smart Chain', chainId: 56,
     weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
-    router: '0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2',
-    quoter: '0x78D78E420Da98ad378D7799bE8f4AF69033EB077',
-    feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
     baseReserveWei: ethers.parseEther('0.002'),
   },
@@ -100,13 +82,13 @@ const ERC20_ABI = [
 ];
 const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 
-const QUOTER_ABI = [
-  'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
-];
+// 0x Settler's AllowanceHolder. Approve this contract once per token;
+// 0x pulls tokens through it during the swap.
+const ZERO_EX_ALLOWANCE_HOLDER = '0x0000000000001fF3684f28c67538d4D072C22734';
 
-const ROUTER_ABI = [
-  'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
-];
+// 0x API is proxied through the Cloudflare worker to keep the API key
+// out of the client bundle. The worker injects the key server-side.
+const ZERO_EX_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/0x';
 
 const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
 
@@ -208,125 +190,138 @@ export async function previewWallet(chain, walletAddress) {
   return result;
 }
 
-async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
-  let best = null;
-  const failures = [];
-
-  for (const fee of feeTiers) {
-    try {
-      const q = await quoter.quoteExactInputSingle.staticCall({
-        tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0,
-      });
-      const out = q[0] ?? q.amountOut;
-      if (!best || out > best.out) best = { fee, out };
-    } catch (e) {
-      failures.push({ fee, reason: shortError(e) });
-    }
-  }
-
-  findBestQuote.lastFailures = best ? null : failures;
-  return best;
-}
-
 async function ensureApproval(tokenContract, owner, spender, amount, signer) {
   const allowance = await tokenContract.allowance(owner, spender);
   if (allowance >= amount) return null;
   return await tokenContract.connect(signer).approve(spender, ethers.MaxUint256);
 }
 
-function failureNote(failures) {
-  if (!failures || failures.length === 0) return null;
-  return failures.map((f) => `${f.fee / 10000}%: ${f.reason}`).join('; ');
-}
+/**
+ * Get a 0x quote with atomic fee splitting, via the RPC proxy.
+ *
+ * The non-fee portion of the swap output goes to `userDestination`.
+ * The fee portion (SWAP_FEE_BPS) goes to `feeRecipient` in `swapFeeToken`.
+ *
+ * The proxy worker injects the 0x API key — no key is passed from here.
+ */
+async function getZeroExQuote({
+  chain,
+  sellToken,
+  buyToken,
+  sellAmount,
+  takerAddress,
+  userDestination,
+  feeRecipient,
+  feeBps,
+}) {
+  const cfg = CHAINS[chain];
+  if (!cfg) throw new Error(`Unknown chain: ${chain}`);
 
-async function simulateSwap(router, params, signer) {
-  try {
-    await router.connect(signer).exactInputSingle.staticCall(params);
-    return { ok: true };
-  } catch (e) {
-    const msg = e.message || String(e);
-    if (msg.includes('STF')) return { ok: false, reason: 'transfer restricted or fee-on-transfer' };
-    if (msg.includes('Too little received')) return { ok: false, reason: 'slippage exceeded' };
-    if (msg.includes('TransferHelper')) return { ok: false, reason: 'token transfer rejected' };
-    if (msg.includes('SafeERC20')) return { ok: false, reason: 'token transfer rejected' };
-    if (msg.includes('balance')) return { ok: false, reason: 'insufficient balance' };
-    if (msg.includes('allowance')) return { ok: false, reason: 'approval missing' };
-    if (msg.includes('reverted')) return { ok: false, reason: 'swap would revert' };
-    return { ok: false, reason: shortError(e) };
+  const params = new URLSearchParams({
+    chainId: String(cfg.chainId),
+    sellToken,
+    buyToken,
+    sellAmount: sellAmount.toString(),
+    taker: takerAddress,
+    recipient: userDestination,
+    swapFeeRecipient: feeRecipient,
+    swapFeeBps: String(feeBps),
+    swapFeeToken: buyToken,
+  });
+
+  const url = `${ZERO_EX_PROXY}/swap/allowance-holder/quote?${params}`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`0x quote ${resp.status}: ${text.slice(0, 200)}`);
   }
+  return resp.json();
 }
 
 /**
  * Sweep a single EVM wallet on a single chain.
  *
- * IMPORTANT: All swaps and transfers send USDC to FEE_WALLET_EVM, not to
- * the user's destination. The operator forwards 90% to the user afterward
- * using the amount returned in `usdcReceived`.
+ * Output model (direct-to-user):
+ *   - Non-fee portion of every swap's USDC output → `opts.userDestination`
+ *   - Fee portion (SWAP_FEE_BPS) of every swap's USDC output → FEE_WALLET_EVM
+ *   - USDC the wallet already holds is transferred in full to userDestination
+ *     (the fee is only taken on swaps, not on pre-existing USDC)
+ *
+ * No manual forwarding needed.
  *
  * Returns:
  *   {
- *     chain, address,
+ *     chain, address, recipient, userDestination,
  *     swaps, transfers, errors,
- *     usdcReceivedRaw: string,  // total USDC that landed in the fee wallet (raw units)
+ *     usdcReceivedRaw: string,     // total USDC moved (user + fee)
+ *     userReceivedRaw: string,     // USDC that landed at userDestination
+ *     feeReceivedRaw:  string,     // USDC that landed at FEE_WALLET_EVM
  *   }
  */
 export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   const cfg = CHAINS[chain];
   if (!cfg) throw new Error(`Unknown chain: ${chain}`);
   const provider = getProvider(chain);
-  const signer = signerOrWallet.connect ? (signerOrWallet.provider ? signerOrWallet : signerOrWallet.connect(provider)) : signerOrWallet;
+  const signer = signerOrWallet.connect
+    ? (signerOrWallet.provider ? signerOrWallet : signerOrWallet.connect(provider))
+    : signerOrWallet;
   const address = await signer.getAddress();
   const usdc = USDC_ADDRESSES[chain];
   const usdcDecimals = chain === 'bnb' ? 18 : 6;
   const dryRun = !!opts.dryRun;
-  const slippageBps = BigInt(opts.slippageBps ?? 100);
-
-  // All destination-bearing fields point at the fee wallet.
-  const recipient = FEE_WALLET_EVM;
+  const userDestination = opts.userDestination || address;
 
   const results = {
     chain,
     address,
-    recipient,
+    recipient: FEE_WALLET_EVM,
+    userDestination,
     swaps: [],
     transfers: [],
     errors: [],
     usdcReceivedRaw: '0',
+    userReceivedRaw: '0',
+    feeReceivedRaw: '0',
   };
 
-  let usdcReceived = 0n;
+  let totalReceived = 0n;
+  let userReceived = 0n;
+  let feeReceived = 0n;
 
-  // Helper: read the USDC balance of the fee wallet before and after each action
-  // so we can compute exactly how much arrived.
   const usdcContractRead = new ethers.Contract(usdc, ERC20_ABI, provider);
-  const readFeeBalance = async () => {
+  const readBalance = async (addr) => {
     try {
-      return await usdcContractRead.balanceOf(recipient);
+      return await usdcContractRead.balanceOf(addr);
     } catch {
       return 0n;
     }
   };
 
-  // ---- USDC direct transfer ----
+  // ---- USDC direct transfer (no fee taken — user already owns USDC) ----
   try {
     const bal = await usdcContractRead.balanceOf(address);
     if (bal > 0n) {
       if (dryRun) {
-        results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, usdcDecimals), status: 'DRY_RUN' });
-        // For dry-run, use the amount that WOULD arrive
-        usdcReceived += bal;
-      } else {
-        const before = await readFeeBalance();
-        const usdcWrite = new ethers.Contract(usdc, ERC20_ABI, signer);
-        const tx = await usdcWrite.transfer(recipient, bal);
-        const receipt = await tx.wait();
-        const after = await readFeeBalance();
-        const received = after > before ? after - before : 0n;
-        usdcReceived += received;
         results.transfers.push({
           symbol: 'USDC',
           amount: ethers.formatUnits(bal, usdcDecimals),
-          received: ethers.formatUnits(received, usdcDecimals),
+          status: 'DRY_RUN',
+        });
+        totalReceived += bal;
+        userReceived += bal;
+      } else {
+        const beforeUser = await readBalance(userDestination);
+        const usdcWrite = new ethers.Contract(usdc, ERC20_ABI, signer);
+        const tx = await usdcWrite.transfer(userDestination, bal);
+        const receipt = await tx.wait();
+        const afterUser = await readBalance(userDestination);
+        const landed = afterUser > beforeUser ? afterUser - beforeUser : 0n;
+        totalReceived += landed;
+        userReceived += landed;
+        results.transfers.push({
+          symbol: 'USDC',
+          amount: ethers.formatUnits(bal, usdcDecimals),
+          received: ethers.formatUnits(landed, usdcDecimals),
           txHash: tx.hash,
           status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
         });
@@ -334,12 +329,8 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     }
   } catch (e) { results.errors.push(`USDC transfer: ${shortError(e)}`); }
 
-  // ---- ERC-20 tokens ----
+  // ---- ERC-20 tokens via 0x (atomic split) ----
   if (opts.tokens && opts.tokens.length > 0) {
-    const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
-    const routerRead = new ethers.Contract(cfg.router, ROUTER_ABI, provider);
-    const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
-
     for (const token of opts.tokens) {
       if (token.address.toLowerCase() === usdc.toLowerCase()) continue;
       try {
@@ -347,71 +338,93 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         const bal = await tokenRead.balanceOf(address);
         if (bal === 0n) continue;
 
-        const best = await findBestQuote(quoter, token.address, usdc, bal, cfg.feeTiers);
-        if (!best) {
-          results.swaps.push({
-            symbol: token.symbol,
-            status: 'NO_ROUTE',
-            note: failureNote(findBestQuote.lastFailures),
-          });
+        if (dryRun) {
+          try {
+            const quote = await getZeroExQuote({
+              chain,
+              sellToken: token.address,
+              buyToken: usdc,
+              sellAmount: bal,
+              takerAddress: address,
+              userDestination,
+              feeRecipient: FEE_WALLET_EVM,
+              feeBps: SWAP_FEE_BPS,
+            });
+            const buyAmount = BigInt(quote.buyAmount || '0');
+            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
+            const userPortion = buyAmount - feePortion;
+            totalReceived += buyAmount;
+            userReceived += userPortion;
+            feeReceived += feePortion;
+            results.swaps.push({
+              symbol: token.symbol,
+              amountIn: ethers.formatUnits(bal, token.decimals),
+              amountOutExpected: ethers.formatUnits(buyAmount, usdcDecimals),
+              userShare: ethers.formatUnits(userPortion, usdcDecimals),
+              feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+              mode: '0x-atomic-split',
+              status: 'DRY_RUN',
+            });
+          } catch (e) {
+            results.swaps.push({
+              symbol: token.symbol,
+              status: 'NO_ROUTE',
+              note: `0x quote failed: ${e.message}`,
+            });
+          }
           continue;
         }
 
-        if (best.out < MIN_SWAP_VALUE_USDC) {
+        // Live: quote, approve AllowanceHolder, execute.
+        const quote = await getZeroExQuote({
+          chain,
+          sellToken: token.address,
+          buyToken: usdc,
+          sellAmount: bal,
+          takerAddress: address,
+          userDestination,
+          feeRecipient: FEE_WALLET_EVM,
+          feeBps: SWAP_FEE_BPS,
+        });
+
+        // Skip dust swaps below the value threshold.
+        const buyAmount = BigInt(quote.buyAmount || '0');
+        if (buyAmount < MIN_SWAP_VALUE_USDC) {
           results.swaps.push({
             symbol: token.symbol,
             status: 'SKIPPED',
-            note: `value too low (~$${ethers.formatUnits(best.out, usdcDecimals)} USDC, min $${ethers.formatUnits(MIN_SWAP_VALUE_USDC, 6)})`,
+            note: `value too low (~$${ethers.formatUnits(buyAmount, usdcDecimals)} USDC)`,
           });
-          continue;
-        }
-
-        const minOut = best.out - (best.out * slippageBps) / 10000n;
-
-        if (dryRun) {
-          results.swaps.push({
-            symbol: token.symbol,
-            amountIn: ethers.formatUnits(bal, token.decimals),
-            amountOutExpected: ethers.formatUnits(best.out, usdcDecimals),
-            amountOutMinimum: ethers.formatUnits(minOut, usdcDecimals),
-            feeTier: best.fee,
-            status: 'DRY_RUN',
-          });
-          usdcReceived += best.out;
           continue;
         }
 
         const tokenWrite = new ethers.Contract(token.address, ERC20_ABI, signer);
-        const approveTx = await ensureApproval(tokenWrite, address, cfg.router, bal, signer);
+        const approveTx = await ensureApproval(
+          tokenWrite, address, ZERO_EX_ALLOWANCE_HOLDER, bal, signer
+        );
         if (approveTx) await approveTx.wait();
 
-        const simParams = {
-          tokenIn: token.address,
-          tokenOut: usdc,
-          fee: best.fee,
-          recipient,                    // ← fee wallet
-          amountIn: bal,
-          amountOutMinimum: minOut,
-          sqrtPriceLimitX96: 0,
-        };
-
-        const sim = await simulateSwap(routerRead, simParams, signer);
-        if (!sim.ok) {
-          results.swaps.push({ symbol: token.symbol, status: 'SKIPPED', note: sim.reason });
-          continue;
-        }
-
-        const before = await readFeeBalance();
-        const tx = await router.exactInputSingle(simParams);
+        const tx = await signer.sendTransaction({
+          to: quote.transaction.to,
+          data: quote.transaction.data,
+          value: quote.transaction.value || '0x0',
+          gasLimit: quote.transaction.gas ? ethers.toBigInt(quote.transaction.gas) : undefined,
+        });
         const receipt = await tx.wait();
-        const after = await readFeeBalance();
-        const received = after > before ? after - before : 0n;
-        usdcReceived += received;
+
+        const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
+        const userPortion = buyAmount - feePortion;
+        totalReceived += buyAmount;
+        userReceived += userPortion;
+        feeReceived += feePortion;
 
         results.swaps.push({
           symbol: token.symbol,
           txHash: tx.hash,
-          received: ethers.formatUnits(received, usdcDecimals),
+          received: ethers.formatUnits(buyAmount, usdcDecimals),
+          userShare: ethers.formatUnits(userPortion, usdcDecimals),
+          feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+          mode: '0x-atomic-split',
           status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
         });
       } catch (e) {
@@ -420,7 +433,11 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     }
   }
 
-  // ---- Native token → USDC ----
+  // ---- Native token → USDC via 0x ----
+  //
+  // Native coins can't be sold directly through 0x's AllowanceHolder
+  // endpoint — it sells ERC-20s. So we wrap first, then swap the wrapped
+  // token through the same 0x flow. Two signatures plus the wrap itself.
   try {
     const nativeBal = await provider.getBalance(address);
     const minSwap = ethers.parseEther('0.00005');
@@ -428,81 +445,115 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
 
     if (nativeBal <= minSwap) {
       // nothing
-    } else if (dryRun) {
-      const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
-      const best = await findBestQuote(quoter, cfg.weth, usdc, nativeBal, cfg.feeTiers);
-      if (!best) {
-        results.swaps.push({ symbol: nativeSym, status: 'NO_ROUTE', note: failureNote(findBestQuote.lastFailures) });
-      } else if (best.out < MIN_SWAP_VALUE_USDC) {
-        results.swaps.push({
-          symbol: nativeSym,
-          status: 'SKIPPED',
-          note: `value too low (~$${ethers.formatUnits(best.out, usdcDecimals)} USDC)`,
-        });
-      } else {
-        results.swaps.push({
-          symbol: nativeSym,
-          amountIn: ethers.formatEther(nativeBal),
-          amountOutExpected: ethers.formatUnits(best.out, usdcDecimals),
-          feeTier: best.fee,
-          status: 'DRY_RUN',
-        });
-        usdcReceived += best.out;
-      }
     } else {
       const reserve = await computeReserve(chain, provider);
-      if (nativeBal > reserve + minSwap) {
-        const wrapAmount = nativeBal - reserve;
-        const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
-        const best = await findBestQuote(quoter, cfg.weth, usdc, wrapAmount, cfg.feeTiers);
-        if (!best) {
-          results.swaps.push({ symbol: nativeSym, status: 'NO_ROUTE', note: failureNote(findBestQuote.lastFailures) });
-        } else if (best.out < MIN_SWAP_VALUE_USDC) {
-          results.swaps.push({
-            symbol: nativeSym,
-            status: 'SKIPPED',
-            note: `value too low (~$${ethers.formatUnits(best.out, usdcDecimals)} USDC)`,
-          });
-        } else {
-          const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
-          const wrapTx = await weth.deposit({ value: wrapAmount });
-          await wrapTx.wait();
-          const approveTx = await ensureApproval(weth, address, cfg.router, wrapAmount, signer);
-          if (approveTx) await approveTx.wait();
-          const minOut = best.out - (best.out * slippageBps) / 10000n;
-          const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
-          const before = await readFeeBalance();
-          const tx = await router.exactInputSingle({
-            tokenIn: cfg.weth,
-            tokenOut: usdc,
-            fee: best.fee,
-            recipient,                  // ← fee wallet
-            amountIn: wrapAmount,
-            amountOutMinimum: minOut,
-            sqrtPriceLimitX96: 0,
-          });
-          const receipt = await tx.wait();
-          const after = await readFeeBalance();
-          const received = after > before ? after - before : 0n;
-          usdcReceived += received;
-          results.swaps.push({
-            symbol: nativeSym,
-            txHash: tx.hash,
-            received: ethers.formatUnits(received, usdcDecimals),
-            status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
-          });
-        }
-      } else if (nativeBal > 0n) {
+      if (nativeBal <= reserve + minSwap) {
         results.swaps.push({
           symbol: nativeSym,
           status: 'SKIPPED',
           note: `${ethers.formatEther(nativeBal)} below reserve ${ethers.formatEther(reserve)}`,
         });
+      } else {
+        const wrapAmount = nativeBal - reserve;
+
+        if (dryRun) {
+          try {
+            const quote = await getZeroExQuote({
+              chain,
+              sellToken: cfg.weth,
+              buyToken: usdc,
+              sellAmount: wrapAmount,
+              takerAddress: address,
+              userDestination,
+              feeRecipient: FEE_WALLET_EVM,
+              feeBps: SWAP_FEE_BPS,
+            });
+            const buyAmount = BigInt(quote.buyAmount || '0');
+            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
+            const userPortion = buyAmount - feePortion;
+            totalReceived += buyAmount;
+            userReceived += userPortion;
+            feeReceived += feePortion;
+            results.swaps.push({
+              symbol: nativeSym,
+              amountIn: ethers.formatEther(wrapAmount),
+              amountOutExpected: ethers.formatUnits(buyAmount, usdcDecimals),
+              userShare: ethers.formatUnits(userPortion, usdcDecimals),
+              feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+              mode: '0x-atomic-split',
+              status: 'DRY_RUN',
+            });
+          } catch (e) {
+            results.swaps.push({
+              symbol: nativeSym,
+              status: 'NO_ROUTE',
+              note: `0x quote failed: ${e.message}`,
+            });
+          }
+        } else {
+          // Wrap native → WETH
+          const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
+          const wrapTx = await weth.deposit({ value: wrapAmount });
+          await wrapTx.wait();
+
+          // Quote
+          const quote = await getZeroExQuote({
+            chain,
+            sellToken: cfg.weth,
+            buyToken: usdc,
+            sellAmount: wrapAmount,
+            takerAddress: address,
+            userDestination,
+            feeRecipient: FEE_WALLET_EVM,
+            feeBps: SWAP_FEE_BPS,
+          });
+
+          const buyAmount = BigInt(quote.buyAmount || '0');
+          if (buyAmount < MIN_SWAP_VALUE_USDC) {
+            results.swaps.push({
+              symbol: nativeSym,
+              status: 'SKIPPED',
+              note: `value too low (~$${ethers.formatUnits(buyAmount, usdcDecimals)} USDC)`,
+            });
+          } else {
+            const wethWrite = new ethers.Contract(cfg.weth, ERC20_ABI, signer);
+            const approveTx = await ensureApproval(
+              wethWrite, address, ZERO_EX_ALLOWANCE_HOLDER, wrapAmount, signer
+            );
+            if (approveTx) await approveTx.wait();
+
+            const tx = await signer.sendTransaction({
+              to: quote.transaction.to,
+              data: quote.transaction.data,
+              value: quote.transaction.value || '0x0',
+              gasLimit: quote.transaction.gas ? ethers.toBigInt(quote.transaction.gas) : undefined,
+            });
+            const receipt = await tx.wait();
+
+            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
+            const userPortion = buyAmount - feePortion;
+            totalReceived += buyAmount;
+            userReceived += userPortion;
+            feeReceived += feePortion;
+
+            results.swaps.push({
+              symbol: nativeSym,
+              txHash: tx.hash,
+              received: ethers.formatUnits(buyAmount, usdcDecimals),
+              userShare: ethers.formatUnits(userPortion, usdcDecimals),
+              feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+              mode: '0x-atomic-split',
+              status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
+            });
+          }
+        }
       }
     }
   } catch (e) { results.errors.push(`native: ${shortError(e)}`); }
 
-  results.usdcReceivedRaw = usdcReceived.toString();
+  results.usdcReceivedRaw = totalReceived.toString();
+  results.userReceivedRaw = userReceived.toString();
+  results.feeReceivedRaw = feeReceived.toString();
   return results;
 }
 

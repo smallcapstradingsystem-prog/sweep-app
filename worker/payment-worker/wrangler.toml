@@ -1,8 +1,0 @@
-name = "sweep-payment"
-main = "index.js"
-compatibility_date = "2024-09-23"
-
-kv_namespaces = [
-  { binding = "CREDITS", id = "1a595b317bd54c048a4b4e9563e798bc" },
-  { binding = "PENDING_PAYMENTS", id = "b74907f1831c41bdb992a561cdf7b8e1" }
-]

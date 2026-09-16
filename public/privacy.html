@@ -45,7 +45,7 @@
     <main class="wrap">
         <article class="legal">
             <h1>Privacy Policy</h1>
-            <p class="updated">Last updated: 2026-09-15</p>
+            <p class="updated">Last updated: 2026-09-16</p>
 
             <div class="highlight">
                 <strong>Short version:</strong> We don't have your keys, your
@@ -96,12 +96,31 @@
             </ul>
             <p>Retention: up to 7 days.</p>
 
-            <h3>2.3 Analytics</h3>
+            <h3>2.3 Sweep receipts</h3>
+            <p>
+                When you complete a live sweep, our payment worker records a
+                receipt for accounting purposes. A receipt includes:
+            </p>
+            <ul>
+                <li>Your pseudonymous client ID (a random 48-character hex string stored in your browser's localStorage — it is not linked to any identity)</li>
+                <li>The source wallet addresses involved in the sweep</li>
+                <li>The destination address you chose</li>
+                <li>The amount swept and the service fee taken</li>
+                <li>On-chain transaction hashes for the swap transactions</li>
+            </ul>
+            <p>
+                We do <strong>not</strong> record your mnemonic, private keys,
+                or any data that could be used to derive them. The receipt
+                exists so we can audit service fee collection and reconcile
+                with on-chain activity. Retention: up to 1 year.
+            </p>
+
+            <h3>2.4 Analytics</h3>
             <p>
                 We may use privacy-respecting analytics that do
                 <strong>not</strong> use cookies, do not fingerprint users, and
                 do not collect personal data. We only see aggregate page views
-                and referrers.
+                and referrers. Analytics are currently disabled.
             </p>
 
             <h2>3. What third parties see</h2>
@@ -125,9 +144,19 @@
                         <td>Necessary to read balances and broadcast transactions</td>
                     </tr>
                     <tr>
-                        <td>Jupiter (Solana swaps)</td>
-                        <td>Your IP, the swap quote you request</td>
-                        <td>To compute swap routes</td>
+                        <td>0x (EVM swap routing)</td>
+                        <td>Your IP, the swap quote you request, the wallet address executing the swap</td>
+                        <td>To compute swap routes and execute swaps on EVM chains</td>
+                    </tr>
+                    <tr>
+                        <td>deBridge (Solana → Ethereum routing)</td>
+                        <td>Your IP, the Solana wallet address, the destination EVM address, the order amount</td>
+                        <td>To bridge Solana assets to Ethereum USDC</td>
+                    </tr>
+                    <tr>
+                        <td>THORChain (Bitcoin → Ethereum routing)</td>
+                        <td>Your IP, the Bitcoin address, the destination EVM address, the swap amount</td>
+                        <td>To bridge Bitcoin to Ethereum USDC</td>
                     </tr>
                     <tr>
                         <td>mempool.space (Bitcoin)</td>
@@ -139,6 +168,11 @@
                         <td>Your IP, the URL you requested</td>
                         <td>Serving the site, DDoS protection</td>
                     </tr>
+                    <tr>
+                        <td>Square (credit purchases, if used)</td>
+                        <td>Whatever you provide during checkout</td>
+                        <td>Processing credit card payments (optional; crypto payments do not use Square)</td>
+                    </tr>
                 </tbody>
             </table>
 
@@ -149,17 +183,29 @@
                 VPN or Tor.
             </p>
 
-            <h2>4. Cookies</h2>
+            <h2>4. Cookies and local storage</h2>
             <p>
-                The Service does not set any cookies. It does not use
-                localStorage, sessionStorage, or IndexedDB to persist any data
-                between sessions. When you close the tab, everything is gone.
+                The Service does not set any cookies. It uses
+                <code>localStorage</code> to persist:
+            </p>
+            <ul>
+                <li>A pseudonymous client ID (a random hex string used to track credit balance)</li>
+                <li>Your credit balance cache</li>
+            </ul>
+            <p>
+                It does <strong>not</strong> persist your mnemonic, private
+                keys, destination address, or sweep history. When you click
+                "Clear" or close the tab, everything except the client ID is
+                discarded. You can clear the client ID at any time through your
+                browser's developer tools or settings.
             </p>
 
             <h2>5. Data retention</h2>
             <p>
-                Because we don't collect your data in the first place, there's
-                nothing to retain. Server logs are retained as described in §2.
+                Server logs are retained as described in §2.1. RPC proxy logs
+                are retained as described in §2.2. Sweep receipts are retained
+                as described in §2.3. Everything else is not collected in the
+                first place, so there is nothing to retain.
             </p>
 
             <h2>6. Children</h2>
@@ -173,19 +219,30 @@
             <h2>7. Your rights</h2>
             <p>
                 Depending on your jurisdiction, you may have rights under
-                GDPR, CCPA, or similar laws. Because we don't collect personal
-                data, most of these rights are moot — but if you have a
-                question, contact us.
+                GDPR, CCPA, or similar laws, including rights to access,
+                correct, or delete personal data. Because we don't collect
+                personal data, most of these rights are moot — but if you
+                have a question or want us to delete a sweep receipt associated
+                with your client ID, contact us at
+                <a href="mailto:privacy@sweeper.cloud">privacy@sweeper.cloud</a>.
             </p>
 
-            <h2>8. Changes</h2>
+            <h2>8. Security</h2>
+            <p>
+                We use industry-standard practices to protect the limited data
+                we do collect. See our <a href="/security-policy.html">security
+                model</a> for details on how keys are handled and what you can
+                verify yourself.
+            </p>
+
+            <h2>9. Changes</h2>
             <p>
                 We may update this Privacy Policy from time to time. Material
                 changes will be posted on this page with a new "Last updated"
                 date.
             </p>
 
-            <h2>9. Contact</h2>
+            <h2>10. Contact</h2>
             <p>
                 Questions about privacy? Contact us at
                 <a href="mailto:privacy@sweeper.cloud">privacy@sweeper.cloud</a>.
@@ -196,7 +253,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/terms.html">Terms</a> · <a href="/security-policy.html">Security</a></p>
+                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/terms.html">Terms</a> · <a href="/security-policy.html">Security</a> · <a href="/private-source.html">Source policy</a></p>
             </div>
         </div>
     </footer>

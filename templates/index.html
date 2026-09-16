@@ -39,7 +39,7 @@
 
             <div class="cta-row">
                 <a href="/app.html" class="btn btn-primary btn-lg">Launch App →</a>
-                <a href="https://github.com/smallcapstradingsystem-prog/sweep-app" class="btn btn-secondary btn-lg">View source</a>
+                <a href="/private-source.html" class="btn btn-secondary btn-lg">Why not open source?</a>
             </div>
 
             <div class="trust-row">
@@ -92,7 +92,7 @@
                         <li>Every transaction signed locally — no server holds your keys</li>
                         <li>No account, no KYC, no email required</li>
                         <li>Works with mnemonic, WalletConnect, Ledger, or Trezor</li>
-                        <li>Open source, MIT licensed — audit the code yourself</li>
+                        <li>Independently verifiable — check DevTools → Network yourself</li>
                     </ul>
                 </div>
             </div>
@@ -231,7 +231,11 @@
             </details>
             <details>
                 <summary>How do I verify that?</summary>
-                <p>Open DevTools → Network. Paste a mnemonic. Click Preview. Search every request for a word from your phrase. You'll find nothing.</p>
+                <p>Open DevTools → Network. Paste a mnemonic. Click Preview. Search every request for a word from your phrase. You'll find nothing. See <a href="/private-source.html">why the source is private</a> and what else you can verify.</p>
+            </details>
+            <details>
+                <summary>Why isn't the source code public?</summary>
+                <p>The fee and routing logic is the core of the product, and client-side bundles are trivially decompiled. We've laid out the full reasoning — and what you can still verify without source — at <a href="/private-source.html">/private-source.html</a>. Security researchers can request NDA access to the private repo.</p>
             </details>
             <details>
                 <summary>How do payments work?</summary>
@@ -287,7 +291,7 @@
                     <h4>Security</h4>
                     <ul>
                         <li><a href="/security-policy.html">Security model</a></li>
-                        <li><a href="https://github.com/smallcapstradingsystem-prog/sweep-app">Source</a></li>
+                        <li><a href="/private-source.html">Source policy</a></li>
                     </ul>
                 </div>
                 <div>
@@ -300,7 +304,7 @@
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. MIT licensed. Provided as-is, no warranty.</p>
+                <p>© 2026 Sweeper Labs. All rights reserved. Provided as-is, no warranty.</p>
                 <p style="font-size: 11px; margin-top: 8px;">
                     Built {%BUILD_DATE%} · bundle {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
                 </p>

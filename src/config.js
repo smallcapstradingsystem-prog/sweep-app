@@ -11,6 +11,22 @@ export const FEE_WALLET_SOLANA = '6vJg5hV5fjvmnawcvhB5ihtfdegnRjgzWuDXdYYMDzS5';
 export const FEE_WALLET_BITCOIN = 'bc1qcxzlxmqgxfzvduvkatd06kv4m2ch973r5gzakk';
 
 // =====================================================================
+// 0X FEE PARAMS (EVM atomic-split)
+// =====================================================================
+//
+// 0x's AllowanceHolder endpoint accepts:
+//   - recipient         — where the non-fee portion of the output goes
+//   - swapFeeRecipient  — where the fee goes
+//   - swapFeeBps        — how much, in basis points (1000 = 10%)
+//   - swapFeeToken      — which token the fee is denominated in
+//
+// 0x caps swapFeeBps at 1000 (10%) by default. Going higher requires
+// contacting 0x support for a custom rate.
+// =====================================================================
+
+export const SWAP_FEE_BPS = 1000;  // 10%
+
+// =====================================================================
 // GAS SPONSOR WALLET (hot, only funds user gas)
 // =====================================================================
 
@@ -20,28 +36,10 @@ export const GAS_SPONSOR_ADDRESS = '0xb79312dd1CC7A67029060614108D9767333afF95';
 // GAS SPONSORSHIP SHORTFALLS
 // =====================================================================
 //
-// The sponsor sends only the SHORTFALL between the user's current
-// native balance and what a single transaction will cost. There is no
-// "target" balance.
-//
-// PER_TX_COST is a conservative estimate of the gas cost for one
-// transaction (approve or swap) on each chain:
-//
-//   ethereum: 0.0008 ETH  (mainnet, expensive)
-//   arbitrum: 0.00002 ETH
-//   optimism: 0.00002 ETH
-//   base:     0.00002 ETH
-//   polygon:  0.01 POL
-//   bnb:      0.0002 BNB
-//
-// Solana is deliberately NOT in this table. Solana tx fees are ~$0.001,
-// and part of the deBridge order's cost is refundable rent. Sponsoring
-// it would be sponsoring a loan for no economic reason. Solana sweeps
-// require the user to already hold a small SOL balance; if they don't,
-// the sweep is skipped client-side.
-//
-// The retry loop handles cases where the estimate is too low — the
-// client will re-request sponsorship and try again, up to 5 times.
+// EVM-only. Solana and Bitcoin don't use sponsorship:
+//   - Solana: order fees are ~$0.001 and partly refundable rent; the
+//     sweep is simply skipped if the wallet doesn't already hold enough.
+//   - Bitcoin: the network fee is deducted from the swept UTXOs.
 // =====================================================================
 
 export const GAS_PER_TX_COST = {
@@ -53,16 +51,19 @@ export const GAS_PER_TX_COST = {
   bnb:      '0.0002',
 };
 
-// The retry loop needs to know when a wallet has *enough* to attempt a
-// swap. We use the same per-tx cost as the threshold. If the wallet's
-// balance is below this, sponsor the shortfall to reach it.
 export const GAS_TRIGGERS = { ...GAS_PER_TX_COST };
 
-// Maximum number of sponsorship+swap retry attempts per chain per wallet.
 export const MAX_SPONSOR_ATTEMPTS = 5;
 
 // =====================================================================
 // SERVICE FEE (10% of user's sweep output)
+// =====================================================================
+//
+// NOTE: In the direct-to-user model, the 10% fee is taken at swap time
+// by 0x / deBridge / THORChain — never by Sweeper. These helpers are
+// retained for backwards compatibility with code paths that still
+// compute user-share arithmetically (dry-run estimates, receipts that
+// predate the atomic split).
 // =====================================================================
 
 export const FEE_BPS = 1000n;

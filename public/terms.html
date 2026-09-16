@@ -33,7 +33,7 @@
     <main class="wrap">
         <article class="legal">
             <h1>Terms of Service</h1>
-            <p class="updated">Last updated: 2026-09-15</p>
+            <p class="updated">Last updated: 2026-09-16</p>
 
             <div class="warn">
                 <strong>Not financial advice.</strong> Sweeper is software, not a financial
@@ -63,6 +63,14 @@
                 <li>Provide investment, tax, legal, or financial advice;</li>
                 <li>Operate as a money service business, money transmitter, virtual asset service provider, or exchange in any jurisdiction.</li>
             </ul>
+            <p>
+                Sweeper charges a service fee on live sweeps. The fee is taken
+                <strong>at swap time</strong> by the underlying routing protocols
+                (0x on EVM, deBridge on Solana, THORChain on Bitcoin) — 10% of
+                the swept value, with the remaining 90% delivered directly to
+                your destination address. Sweeper never takes custody of your
+                funds, even temporarily.
+            </p>
 
             <h2>3. Your responsibilities</h2>
             <p>You agree that:</p>
@@ -85,7 +93,21 @@
                 by your use of the Service.
             </p>
 
-            <h2>5. Assumption of risk</h2>
+            <h2>5. Service fee</h2>
+            <p>
+                Live sweeps incur a <strong>10% service fee</strong> on the swept
+                value. The fee is collected atomically at swap time by the
+                routing protocol and delivered to Sweeper's fee wallet. You
+                receive the remaining 90% directly at your destination address
+                in the same transaction.
+            </p>
+            <p>
+                Sweeps are paid for with prepaid credits, purchased separately.
+                Credits are non-refundable except where required by law. Dry
+                runs and previews do not consume credits.
+            </p>
+
+            <h2>6. Assumption of risk</h2>
             <div class="warn">
                 <strong>You use the Service at your own risk.</strong> Blockchain
                 transactions are risky. You may lose some or all of your funds.
@@ -93,7 +115,8 @@
             <p>You acknowledge and accept the following risks:</p>
             <ul>
                 <li><strong>Software bugs.</strong> The Service may contain bugs that cause it to behave unexpectedly, including moving funds to the wrong address or failing mid-transaction.</li>
-                <li><strong>Smart contract risk.</strong> The Service interacts with third-party smart contracts (Uniswap, Jupiter, and others). Those contracts may have vulnerabilities we cannot control.</li>
+                <li><strong>Smart contract risk.</strong> The Service interacts with third-party protocols (0x, deBridge, THORChain) and their underlying smart contracts. Those protocols may have vulnerabilities we cannot control.</li>
+                <li><strong>Bridge risk.</strong> Cross-chain swaps via deBridge and THORChain depend on external validator sets and solver networks. Failures, delays, or partial fills are possible and outside our control.</li>
                 <li><strong>RPC risk.</strong> The Service relies on third-party RPC endpoints. A malicious or malfunctioning RPC could return incorrect data, censor transactions, or leak metadata about your requests.</li>
                 <li><strong>Slippage and MEV.</strong> Token swaps may execute at worse prices than quoted. Sandwich attacks may extract value from your transactions.</li>
                 <li><strong>Network risk.</strong> Blockchains may be congested, reorganize, or halt. Gas prices may spike. Transactions may fail or take a long time.</li>
@@ -101,7 +124,7 @@
                 <li><strong>Supply chain risk.</strong> The Service's JavaScript bundle depends on third-party npm packages. A compromised dependency could introduce malicious code.</li>
             </ul>
 
-            <h2>6. No warranty</h2>
+            <h2>7. No warranty</h2>
             <p>
                 THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT
                 WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
@@ -115,7 +138,7 @@
                 the Service will be accurate, reliable, or profitable.
             </p>
 
-            <h2>7. Limitation of liability</h2>
+            <h2>8. Limitation of liability</h2>
             <p>
                 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT
                 SHALL SWEEPER LABS, ITS OFFICERS, DIRECTORS, EMPLOYEES,
@@ -141,7 +164,7 @@
                 not apply, and you may have additional rights.
             </p>
 
-            <h2>8. Indemnity</h2>
+            <h2>9. Indemnity</h2>
             <p>
                 You agree to indemnify, defend, and hold harmless Sweeper Labs
                 and its officers, directors, employees, agents, and licensors
@@ -153,7 +176,7 @@
                 any transaction you sign using the Service.
             </p>
 
-            <h2>9. Sanctions and geographic restrictions</h2>
+            <h2>10. Sanctions and geographic restrictions</h2>
             <p>
                 You may not use the Service if you are: (a) located in, a
                 resident of, or organized under the laws of any country or
@@ -164,15 +187,18 @@
                 compliance with all laws applicable to your use.
             </p>
 
-            <h2>10. Intellectual property</h2>
+            <h2>11. Intellectual property</h2>
             <p>
-                The Service's source code is published under the MIT License.
-                The "Sweeper" name, logo, and marketing materials are our
-                trademarks. You may not use them without our prior written
-                permission.
+                The Service's source code is proprietary and not publicly
+                distributed. The "Sweeper" name, logo, and marketing materials
+                are our trademarks. You may not reproduce, modify, distribute,
+                or create derivative works of the Service, its source code, or
+                its trademarks without our prior written permission. See our
+                <a href="/private-source.html">source policy</a> for details on
+                why the source is not public and how to request access.
             </p>
 
-            <h2>11. Modifications</h2>
+            <h2>12. Modifications</h2>
             <p>
                 We may modify these Terms at any time. If we make material
                 changes, we will post the updated Terms on this page with a new
@@ -181,14 +207,14 @@
                 Terms.
             </p>
 
-            <h2>12. Termination</h2>
+            <h2>13. Termination</h2>
             <p>
                 We may terminate or suspend your access to the Service at any
                 time, without notice, for any reason, including if we believe
                 you have violated these Terms.
             </p>
 
-            <h2>13. Governing law and disputes</h2>
+            <h2>14. Governing law and disputes</h2>
             <p>
                 These Terms are governed by the laws of Canada, without
                 regard to its conflict of law provisions. Any dispute arising
@@ -197,7 +223,7 @@
                 consent to the personal jurisdiction of those courts.
             </p>
 
-            <h2>14. Miscellaneous</h2>
+            <h2>15. Miscellaneous</h2>
             <p>
                 These Terms constitute the entire agreement between you and us
                 regarding the Service. If any provision is found unenforceable,
@@ -206,7 +232,7 @@
                 or provision.
             </p>
 
-            <h2>15. Contact</h2>
+            <h2>16. Contact</h2>
             <p>
                 Questions about these Terms? Contact us at
                 <a href="mailto:legal@sweeper.cloud">legal@sweeper.cloud</a>.
@@ -217,7 +243,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
+                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a> · <a href="/private-source.html">Source policy</a></p>
             </div>
         </div>
     </footer>
