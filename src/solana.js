@@ -1,6 +1,6 @@
 import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
-import { FEE_WALLET_EVM } from './config.js';
+import { FEE_WALLET_EVM, FEE_WALLET_SOLANA } from './config.js';
 
 // =====================================================================
 // CONSTANTS
@@ -14,15 +14,12 @@ const ETH_USDC     = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 const DEBRIDGE_API = 'https://dln.debridge.finance/v1.0';
 
 // Reject orders whose estimated output is below this (in USDC, 6dp).
-// deBridge Solana→Ethereum has real overhead (~$1 in op expenses plus
-// protocol fees), so anything under a few dollars isn't worth sweeping.
 const MIN_DEBRIDGE_OUT_USDC = 1_000_000n;  // 1.00 USDC
 
 // Reserve kept behind on Solana after a sweep.
 //
-// Not "gas" — Solana transactions are paid from the wallet's own SOL
-// balance, and placing a deBridge order also allocates refundable rent
-// for three accounts. Estimated per-order cost:
+// Solana transactions and deBridge order rent are paid from the wallet's
+// own SOL balance. Estimated per-order cost:
 //
 //   giveOrderState    176 bytes = 2,115,840 lamports
 //   giveOrderWallet   165 bytes = 2,039,280 lamports
@@ -130,7 +127,7 @@ export async function selectSolanaKeypair(connection, candidates, logLine) {
 // DEBRIDGE — create cross-chain order
 // =====================================================================
 //
-// The affiliate params below direct 10% of the output to
+// The affiliate params below direct 10% of the input to
 // FEE_WALLET_SOLANA. On Solana, that fee is NOT auto-transferred —
 // it accrues inside the DLN program and is claimed periodically by
 // the affiliate-claim-worker.
@@ -144,12 +141,9 @@ async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDesti
     dstChainId: String(ETH_CHAIN),
     dstChainTokenOut: ETH_USDC,
     dstChainTokenOutAmount: 'auto',
-    // Output goes directly to the user's EVM destination.
     dstChainTokenOutRecipient: userDestination,
-    // Refund authority (if the order fails on the destination side).
     srcChainOrderAuthorityAddress: srcAuthority,
     dstChainOrderAuthorityAddress: userDestination,
-    // Affiliate fee: taken from the input token on Solana.
     affiliateFeePercent: '10',
     affiliateFeeRecipient: FEE_WALLET_SOLANA,
   });

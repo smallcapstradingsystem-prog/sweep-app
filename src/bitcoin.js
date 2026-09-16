@@ -15,14 +15,14 @@ const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
 // THORChain affiliate fees require a registered THORName. Raw addresses
 // are not accepted. Register at https://dev.thorchain.org/thornames/.
 //
-// Set THOR_AFFILIATE_NAME to your registered name (e.g. "sweeper") and
-// set its preferred asset to ETH.USDC so fees auto-convert and pay out.
+// Set THOR_AFFILIATE_NAME to your registered name and set its
+// preferred asset to ETH.USDC so fees auto-convert and pay out.
 //
-// If THOR_AFFILIATE_NAME is empty, no affiliate fee is included and the
-// user receives 100% of the swap output.
+// If THOR_AFFILIATE_NAME is empty, no affiliate fee is included and
+// the user receives 100% of the swap output.
 // =====================================================================
 
-const THOR_AFFILIATE_NAME = '';     // e.g. 'sweeper'
+const THOR_AFFILIATE_NAME = '';
 const THOR_AFFILIATE_BPS  = 1000;   // 10%
 
 const MIN_SEND_SATS = 10000;

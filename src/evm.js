@@ -26,7 +26,9 @@ const EXTRA_TOKENS = {
     { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', symbol: 'USDT',   decimals: 6 },
     { address: '0x9417669fBF23357D2774e9D4234219952D36CA5B', symbol: 'USDT.e', decimals: 6 },
   ],
-  base: [],
+  base: [
+    { address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', symbol: 'USDT', decimals: 6 },
+  ],
   bnb: [
     { address: '0x55d398326f99059fF775485246999027B3197955', symbol: 'USDT', decimals: 18 },
     { address: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56', symbol: 'BUSD', decimals: 18 },
@@ -82,12 +84,8 @@ const ERC20_ABI = [
 ];
 const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 
-// 0x Settler's AllowanceHolder. Approve this contract once per token;
-// 0x pulls tokens through it during the swap.
 const ZERO_EX_ALLOWANCE_HOLDER = '0x0000000000001fF3684f28c67538d4D072C22734';
 
-// 0x API is proxied through the Cloudflare worker to keep the API key
-// out of the client bundle. The worker injects the key server-side.
 const ZERO_EX_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/0x';
 
 const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
@@ -202,7 +200,9 @@ async function ensureApproval(tokenContract, owner, spender, amount, signer) {
  * The non-fee portion of the swap output goes to `userDestination`.
  * The fee portion (SWAP_FEE_BPS) goes to `feeRecipient` in `swapFeeToken`.
  *
- * The proxy worker injects the 0x API key — no key is passed from here.
+ * NOTE: 0x's `buyAmount` is the amount the USER receives (net).
+ * The fee is reported separately in `quote.fees.integratorFee.amount`.
+ * Do not treat `buyAmount` as gross.
  */
 async function getZeroExQuote({
   chain,
@@ -239,25 +239,20 @@ async function getZeroExQuote({
 }
 
 /**
- * Sweep a single EVM wallet on a single chain.
+ * Extract the user's net output and the fee from a 0x quote.
  *
- * Output model (direct-to-user):
- *   - Non-fee portion of every swap's USDC output → `opts.userDestination`
- *   - Fee portion (SWAP_FEE_BPS) of every swap's USDC output → FEE_WALLET_EVM
- *   - USDC the wallet already holds is transferred in full to userDestination
- *     (the fee is only taken on swaps, not on pre-existing USDC)
+ * 0x returns:
+ *   buyAmount                          — what the user receives (net)
+ *   fees.integratorFee.amount          — what the fee recipient receives
  *
- * No manual forwarding needed.
- *
- * Returns:
- *   {
- *     chain, address, recipient, userDestination,
- *     swaps, transfers, errors,
- *     usdcReceivedRaw: string,     // total USDC moved (user + fee)
- *     userReceivedRaw: string,     // USDC that landed at userDestination
- *     feeReceivedRaw:  string,     // USDC that landed at FEE_WALLET_EVM
- *   }
+ * These are separate. Do not compute one from the other.
  */
+function parseZeroExAmounts(quote) {
+  const buyAmount = BigInt(quote.buyAmount || '0');
+  const feePortion = BigInt(quote.fees?.integratorFee?.amount || '0');
+  return { userPortion: buyAmount, feePortion };
+}
+
 export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   const cfg = CHAINS[chain];
   if (!cfg) throw new Error(`Unknown chain: ${chain}`);
@@ -284,9 +279,8 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     feeReceivedRaw: '0',
   };
 
-  let totalReceived = 0n;
-  let userReceived = 0n;
-  let feeReceived = 0n;
+  let totalUser = 0n;
+  let totalFee = 0n;
 
   const usdcContractRead = new ethers.Contract(usdc, ERC20_ABI, provider);
   const readBalance = async (addr) => {
@@ -297,7 +291,7 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     }
   };
 
-  // ---- USDC direct transfer (no fee taken — user already owns USDC) ----
+  // ---- USDC direct transfer (no fee taken) ----
   try {
     const bal = await usdcContractRead.balanceOf(address);
     if (bal > 0n) {
@@ -307,8 +301,7 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           amount: ethers.formatUnits(bal, usdcDecimals),
           status: 'DRY_RUN',
         });
-        totalReceived += bal;
-        userReceived += bal;
+        totalUser += bal;
       } else {
         const beforeUser = await readBalance(userDestination);
         const usdcWrite = new ethers.Contract(usdc, ERC20_ABI, signer);
@@ -316,8 +309,7 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         const receipt = await tx.wait();
         const afterUser = await readBalance(userDestination);
         const landed = afterUser > beforeUser ? afterUser - beforeUser : 0n;
-        totalReceived += landed;
-        userReceived += landed;
+        totalUser += landed;
         results.transfers.push({
           symbol: 'USDC',
           amount: ethers.formatUnits(bal, usdcDecimals),
@@ -350,16 +342,13 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
               feeRecipient: FEE_WALLET_EVM,
               feeBps: SWAP_FEE_BPS,
             });
-            const buyAmount = BigInt(quote.buyAmount || '0');
-            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
-            const userPortion = buyAmount - feePortion;
-            totalReceived += buyAmount;
-            userReceived += userPortion;
-            feeReceived += feePortion;
+            const { userPortion, feePortion } = parseZeroExAmounts(quote);
+            totalUser += userPortion;
+            totalFee += feePortion;
             results.swaps.push({
               symbol: token.symbol,
               amountIn: ethers.formatUnits(bal, token.decimals),
-              amountOutExpected: ethers.formatUnits(buyAmount, usdcDecimals),
+              amountOutExpected: ethers.formatUnits(userPortion, usdcDecimals),
               userShare: ethers.formatUnits(userPortion, usdcDecimals),
               feeShare: ethers.formatUnits(feePortion, usdcDecimals),
               mode: '0x-atomic-split',
@@ -375,7 +364,7 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           continue;
         }
 
-        // Live: quote, approve AllowanceHolder, execute.
+        // Live
         const quote = await getZeroExQuote({
           chain,
           sellToken: token.address,
@@ -387,13 +376,12 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           feeBps: SWAP_FEE_BPS,
         });
 
-        // Skip dust swaps below the value threshold.
-        const buyAmount = BigInt(quote.buyAmount || '0');
-        if (buyAmount < MIN_SWAP_VALUE_USDC) {
+        const { userPortion, feePortion } = parseZeroExAmounts(quote);
+        if (userPortion < MIN_SWAP_VALUE_USDC) {
           results.swaps.push({
             symbol: token.symbol,
             status: 'SKIPPED',
-            note: `value too low (~$${ethers.formatUnits(buyAmount, usdcDecimals)} USDC)`,
+            note: `value too low (~$${ethers.formatUnits(userPortion, usdcDecimals)} USDC)`,
           });
           continue;
         }
@@ -412,16 +400,13 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         });
         const receipt = await tx.wait();
 
-        const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
-        const userPortion = buyAmount - feePortion;
-        totalReceived += buyAmount;
-        userReceived += userPortion;
-        feeReceived += feePortion;
+        totalUser += userPortion;
+        totalFee += feePortion;
 
         results.swaps.push({
           symbol: token.symbol,
           txHash: tx.hash,
-          received: ethers.formatUnits(buyAmount, usdcDecimals),
+          received: ethers.formatUnits(userPortion, usdcDecimals),
           userShare: ethers.formatUnits(userPortion, usdcDecimals),
           feeShare: ethers.formatUnits(feePortion, usdcDecimals),
           mode: '0x-atomic-split',
@@ -434,10 +419,6 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   }
 
   // ---- Native token → USDC via 0x ----
-  //
-  // Native coins can't be sold directly through 0x's AllowanceHolder
-  // endpoint — it sells ERC-20s. So we wrap first, then swap the wrapped
-  // token through the same 0x flow. Two signatures plus the wrap itself.
   try {
     const nativeBal = await provider.getBalance(address);
     const minSwap = ethers.parseEther('0.00005');
@@ -468,16 +449,13 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
               feeRecipient: FEE_WALLET_EVM,
               feeBps: SWAP_FEE_BPS,
             });
-            const buyAmount = BigInt(quote.buyAmount || '0');
-            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
-            const userPortion = buyAmount - feePortion;
-            totalReceived += buyAmount;
-            userReceived += userPortion;
-            feeReceived += feePortion;
+            const { userPortion, feePortion } = parseZeroExAmounts(quote);
+            totalUser += userPortion;
+            totalFee += feePortion;
             results.swaps.push({
               symbol: nativeSym,
               amountIn: ethers.formatEther(wrapAmount),
-              amountOutExpected: ethers.formatUnits(buyAmount, usdcDecimals),
+              amountOutExpected: ethers.formatUnits(userPortion, usdcDecimals),
               userShare: ethers.formatUnits(userPortion, usdcDecimals),
               feeShare: ethers.formatUnits(feePortion, usdcDecimals),
               mode: '0x-atomic-split',
@@ -508,12 +486,12 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             feeBps: SWAP_FEE_BPS,
           });
 
-          const buyAmount = BigInt(quote.buyAmount || '0');
-          if (buyAmount < MIN_SWAP_VALUE_USDC) {
+          const { userPortion, feePortion } = parseZeroExAmounts(quote);
+          if (userPortion < MIN_SWAP_VALUE_USDC) {
             results.swaps.push({
               symbol: nativeSym,
               status: 'SKIPPED',
-              note: `value too low (~$${ethers.formatUnits(buyAmount, usdcDecimals)} USDC)`,
+              note: `value too low (~$${ethers.formatUnits(userPortion, usdcDecimals)} USDC)`,
             });
           } else {
             const wethWrite = new ethers.Contract(cfg.weth, ERC20_ABI, signer);
@@ -530,16 +508,13 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             });
             const receipt = await tx.wait();
 
-            const feePortion = (buyAmount * BigInt(SWAP_FEE_BPS)) / 10000n;
-            const userPortion = buyAmount - feePortion;
-            totalReceived += buyAmount;
-            userReceived += userPortion;
-            feeReceived += feePortion;
+            totalUser += userPortion;
+            totalFee += feePortion;
 
             results.swaps.push({
               symbol: nativeSym,
               txHash: tx.hash,
-              received: ethers.formatUnits(buyAmount, usdcDecimals),
+              received: ethers.formatUnits(userPortion, usdcDecimals),
               userShare: ethers.formatUnits(userPortion, usdcDecimals),
               feeShare: ethers.formatUnits(feePortion, usdcDecimals),
               mode: '0x-atomic-split',
@@ -551,9 +526,9 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     }
   } catch (e) { results.errors.push(`native: ${shortError(e)}`); }
 
-  results.usdcReceivedRaw = totalReceived.toString();
-  results.userReceivedRaw = userReceived.toString();
-  results.feeReceivedRaw = feeReceived.toString();
+  results.userReceivedRaw = totalUser.toString();
+  results.feeReceivedRaw = totalFee.toString();
+  results.usdcReceivedRaw = (totalUser + totalFee).toString();
   return results;
 }
 
