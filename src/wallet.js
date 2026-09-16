@@ -6,6 +6,29 @@ import { ethers } from 'ethers';
 import { deriveEvm, deriveSolana, deriveBitcoin } from './derive.js';
 
 // =====================================================================
+// HELPERS
+// =====================================================================
+
+/**
+ * Normalize a signature `v` value to 0 or 1 (yParity).
+ *
+ * Different signers return `v` in different conventions:
+ *   - 0 or 1        → already yParity (some Ledger firmware, Trezor)
+ *   - 27 or 28      → legacy EIP-155 (most Ledger firmware)
+ *   - 25, 26        → EIP-1559 with chain-id encoding in some firmwares
+ *   - 35+           → EIP-155 with chain id (rare, shouldn't appear here)
+ *
+ * Ethers v6 expects 0 or 1 on `Signature.v` for typed transactions.
+ */
+function normalizeV(rawV) {
+  const v = typeof rawV === 'string' ? parseInt(rawV, 16) : Number(rawV);
+  if (v === 0 || v === 1) return v;
+  if (v === 27 || v === 28) return v - 27;
+  if (v === 25 || v === 26) return v - 25;  // some Ledger firmware
+  throw new Error(`Unexpected signature v value: ${v} (raw: ${rawV})`);
+}
+
+// =====================================================================
 // MNEMONIC BACKEND
 // =====================================================================
 
@@ -71,6 +94,15 @@ export class BrowserExtensionBackend {
     return this.address;
   }
 
+  /**
+   * Return a signer for the requested chain.
+   *
+   * The `_provider` argument (the target chain's JsonRpcProvider) is
+   * deliberately ignored: browser extensions sign through their own
+   * provider, which is a live wrapper that always reflects the wallet's
+   * current chain. We just need to make sure the wallet is on the right
+   * chain before calling this (see `switchChain`).
+   */
   async getEthersSigner(_provider) {
     return this.provider.getSigner();
   }
@@ -122,8 +154,12 @@ export async function connectBrowserExtension() {
   const raw = window.ethereum;
 
   // Handle multiple providers (e.g. both MetaMask and Coinbase installed).
-  // EIP-6963 wallets announce themselves; we prefer the first MetaMask.
-  const target = raw.providers?.find((p) => p.isMetaMask) || raw;
+  // EIP-6963 wallets announce themselves via `providers`; we prefer MetaMask.
+  // If `providers` is missing or empty, use the raw provider directly.
+  let target = raw;
+  if (Array.isArray(raw.providers) && raw.providers.length > 0) {
+    target = raw.providers.find((p) => p.isMetaMask) || raw.providers[0];
+  }
 
   // Request accounts — this triggers the popup
   const accounts = await target.request({ method: 'eth_requestAccounts' });
@@ -139,8 +175,6 @@ export async function connectBrowserExtension() {
   // Wrap in ethers
   const ethersProvider = new ethers.BrowserProvider(target);
 
-  // Pass the raw target provider explicitly — this is the EIP-1193 object
-  // (window.ethereum or one of its sub-providers) that has .request().
   return new BrowserExtensionBackend(ethersProvider, target, address, chainId);
 }
 
@@ -275,10 +309,8 @@ export class LedgerBackend {
 
         const sig = await ethApp.signTransaction(path, unsignedHex);
 
-        // Normalize `v`: Ledger may return 27 or 28 (legacy EIP-155 yParity)
-        // even for EIP-1559 transactions, where ethers expects 0 or 1.
-        let v = parseInt(sig.v, 16);
-        if (v >= 27) v -= 27;
+        // Normalize `v` to yParity (0 or 1) for ethers v6.
+        const v = normalizeV(sig.v);
 
         unsignedTx.signature = ethers.Signature.from({
           r: '0x' + sig.r,
@@ -291,17 +323,17 @@ export class LedgerBackend {
 
       async signMessage(message) {
         const messageHex = typeof message === 'string'
-          ? Buffer.from(message).toString('hex')
+          ? Buffer.from(message, 'utf8').toString('hex')
           : Buffer.from(message).toString('hex');
         const sig = await ethApp.signPersonalMessage(path, messageHex);
-        const v = (parseInt(sig.v, 16) - 27).toString(16).padStart(2, '0');
-        return '0x' + sig.r + sig.s + v;
+        const v = normalizeV(sig.v);
+        return ethers.Signature.from({ r: '0x' + sig.r, s: '0x' + sig.s, v }).serialized;
       }
 
       async signTypedData(domain, types, value) {
         const sig = await ethApp.signEIP712Message(path, { domain, types, message: value });
-        const v = (parseInt(sig.v, 16) - 27).toString(16).padStart(2, '0');
-        return '0x' + sig.r + sig.s + v;
+        const v = normalizeV(sig.v);
+        return ethers.Signature.from({ r: '0x' + sig.r, s: '0x' + sig.s, v }).serialized;
       }
 
       async sendTransaction(tx) {
@@ -401,8 +433,7 @@ export class TrezorBackend {
         if (!result.success) throw new Error(result.payload.error);
 
         const { v, r, s } = result.payload;
-        let vNum = parseInt(v, 16);
-        if (vNum >= 27) vNum -= 27;
+        const vNum = normalizeV(v);
 
         const unsignedTx = ethers.Transaction.from(tx);
         unsignedTx.signature = ethers.Signature.from({ r, s, v: vNum });
@@ -412,7 +443,7 @@ export class TrezorBackend {
       async signMessage(message) {
         const { default: TrezorConnect } = await import('@trezor/connect-web');
         const messageHex = typeof message === 'string'
-          ? Buffer.from(message).toString('hex')
+          ? Buffer.from(message, 'utf8').toString('hex')
           : Buffer.from(message).toString('hex');
 
         const result = await TrezorConnect.ethereumSignMessage({
@@ -423,8 +454,8 @@ export class TrezorBackend {
 
         if (!result.success) throw new Error(result.payload.error);
         const { v, r, s } = result.payload;
-        const sigV = (parseInt(v, 16) - 27).toString(16).padStart(2, '0');
-        return '0x' + r + s + sigV;
+        const vNum = normalizeV(v);
+        return ethers.Signature.from({ r, s, v: vNum }).serialized;
       }
 
       async signTypedData(domain, types, value) {
@@ -437,8 +468,8 @@ export class TrezorBackend {
 
         if (!result.success) throw new Error(result.payload.error);
         const { v, r, s } = result.payload;
-        const sigV = (parseInt(v, 16) - 27).toString(16).padStart(2, '0');
-        return '0x' + r + s + sigV;
+        const vNum = normalizeV(v);
+        return ethers.Signature.from({ r, s, v: vNum }).serialized;
       }
 
       async sendTransaction(tx) {

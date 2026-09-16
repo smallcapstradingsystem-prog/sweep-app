@@ -14,6 +14,58 @@ const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
 // outbound fees and slippage will eat most of the value.
 const MIN_SEND_SATS = 10000;
 
+// Fallback fee rate (sat/vB) if the mempool.space fetch fails.
+const FALLBACK_FEE_RATE = 2;
+
+// Cache the recommended fee rate for this long to avoid hammering the API
+// when sweeping many mnemonics in one run.
+const FEE_CACHE_MS = 60 * 1000;
+
+let _cachedFeeRate = null;
+let _cachedFeeRateAt = 0;
+
+/**
+ * Fetch the recommended Bitcoin fee rate from mempool.space.
+ *
+ * Uses `halfHourFee` — the rate estimated to confirm within ~30 minutes.
+ * This is a reasonable default: cheap enough to not overpay, fast enough
+ * that transactions don't sit for hours during mempool congestion.
+ *
+ * Cached for 60 seconds. Falls back to FALLBACK_FEE_RATE on any error.
+ */
+async function fetchRecommendedFeeRate(logLine) {
+  const now = Date.now();
+  if (_cachedFeeRate !== null && now - _cachedFeeRateAt < FEE_CACHE_MS) {
+    return _cachedFeeRate;
+  }
+
+  try {
+    const resp = await fetch(`${MEMPOOL_API}/v1/fees/recommended`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    // Prefer halfHourFee; fall back through the tiers if it's missing.
+    const rate = data.halfHourFee
+      || data.hourFee
+      || data.economyFee
+      || data.fastestFee
+      || FALLBACK_FEE_RATE;
+
+    // Sanity clamp: never below 1 sat/vB (mempool rejects below-minimum txs).
+    const clamped = Math.max(1, Math.floor(rate));
+    _cachedFeeRate = clamped;
+    _cachedFeeRateAt = now;
+
+    if (logLine) logLine(`  Bitcoin fee rate: ${clamped} sat/vB (mempool.space halfHourFee)`);
+    return clamped;
+  } catch (e) {
+    if (logLine) logLine(`  WARN: fee rate fetch failed (${e.message}); using fallback ${FALLBACK_FEE_RATE} sat/vB`);
+    _cachedFeeRate = FALLBACK_FEE_RATE;
+    _cachedFeeRateAt = now;
+    return FALLBACK_FEE_RATE;
+  }
+}
+
 export async function previewBitcoinWallet(address) {
   const result = { address, utxos: [], balance: 0 };
   try {
@@ -77,6 +129,7 @@ async function getThorchainQuote(amountSats, destinationAddress) {
  *     expectedUsdcOut: string,  // USDC raw units (6dp) expected on Ethereum
  *     inboundAddress,       // THORChain vault address (for audit)
  *     memo,                 // swap memo (for audit)
+ *     feeRate: number,      // sat/vB actually used
  *   }
  */
 export async function sweepBitcoin(address, keyPair, opts = {}) {
@@ -90,9 +143,10 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
     expectedUsdcOut: '0',
     inboundAddress: null,
     memo: null,
+    feeRate: null,
   };
-  const feeRate = opts.feeRateSatVb ?? 2;
   const dryRun = !!opts.dryRun;
+  const logLine = opts.logLine;
 
   try {
     const resp = await fetch(`${MEMPOOL_API}/address/${address}/utxo`);
@@ -103,6 +157,10 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
     }
 
     const totalSats = utxos.reduce((sum, u) => sum + u.value, 0);
+
+    // Resolve the fee rate: explicit option > mempool.space > fallback.
+    const feeRate = opts.feeRateSatVb ?? await fetchRecommendedFeeRate(logLine);
+    results.feeRate = feeRate;
 
     // Estimate the Bitcoin tx size including the OP_RETURN output (~80 bytes
     // overhead for the memo output + script).

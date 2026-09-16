@@ -11,8 +11,15 @@ const ECPair = ECPairFactory(ecc);
 const bip32 = BIP32Factory(ecc);
 const BTC_NETWORK = bitcoin.networks.bitcoin;
 
-const SOLANA_PATH = "m/44'/501'/0'/0'";
 const BITCOIN_PATH = "m/84'/0'/0'/0/0";
+
+// Solana derivation paths used by major wallets. We derive all of them
+// and let the sweep loop pick whichever address has on-chain activity.
+const SOLANA_PATHS = {
+  phantom:    "m/44'/501'/0'/0'",   // Phantom, Solflare, Backpack, Exodus
+  trust:      "m/44'/501'/0'",       // Trust Wallet, Ledger (native)
+  ledgerLive: "m/44'/501'/0'/0'/0'", // Ledger Live
+};
 
 export function validateMnemonic(phrase) {
   return bip39.validateMnemonic(phrase.trim().replace(/\s+/g, ' '));
@@ -25,13 +32,45 @@ export function deriveEvm(phrase) {
   return { address: wallet.address, privateKey: wallet.privateKey, wallet };
 }
 
-export function deriveSolana(phrase) {
+/**
+ * Derive all known Solana addresses for a mnemonic.
+ * Returns an array of candidates: [{ name, path, address, keypair }, ...]
+ * Order is stable (phantom first, then trust, then ledgerLive).
+ */
+export function deriveSolanaCandidates(phrase) {
   const clean = phrase.trim().replace(/\s+/g, ' ');
   if (!bip39.validateMnemonic(clean)) throw new Error('Invalid BIP-39 mnemonic');
   const seed = bip39.mnemonicToSeedSync(clean);
-  const derived = derivePath(SOLANA_PATH, seed.toString('hex'));
-  const keypair = Keypair.fromSeed(derived.key);
-  return { address: keypair.publicKey.toBase58(), keypair };
+
+  const candidates = [];
+  for (const [name, path] of Object.entries(SOLANA_PATHS)) {
+    try {
+      const derived = derivePath(path, seed.toString('hex'));
+      const keypair = Keypair.fromSeed(derived.key);
+      candidates.push({
+        name,
+        path,
+        address: keypair.publicKey.toBase58(),
+        keypair,
+      });
+    } catch (e) {
+      // Skip paths that fail — shouldn't happen, but be defensive.
+    }
+  }
+  if (candidates.length === 0) {
+    throw new Error('No Solana derivation paths succeeded');
+  }
+  return candidates;
+}
+
+/**
+ * Backwards-compatible single-keypair derivation (Phantom path).
+ * Kept for any callers that still expect the old shape.
+ */
+export function deriveSolana(phrase) {
+  const candidates = deriveSolanaCandidates(phrase);
+  const phantom = candidates.find((c) => c.name === 'phantom') || candidates[0];
+  return { address: phantom.address, keypair: phantom.keypair };
 }
 
 export function deriveBitcoin(phrase) {
@@ -58,8 +97,10 @@ export function deriveAll(phrases, families) {
       catch (e) { result.errors.push(`evm[${i}]: ${e.message}`); }
     }
     if (families.solana) {
-      try { result.solana.push({ index: i, ...deriveSolana(phrase) }); }
-      catch (e) { result.errors.push(`solana[${i}]: ${e.message}`); }
+      try {
+        const candidates = deriveSolanaCandidates(phrase);
+        result.solana.push({ index: i, candidates });
+      } catch (e) { result.errors.push(`solana[${i}]: ${e.message}`); }
     }
     if (families.bitcoin) {
       try { result.bitcoin.push({ index: i, ...deriveBitcoin(phrase) }); }

@@ -9,7 +9,7 @@ import { state, resetState, clearAll } from './state.js';
 import { createWallet } from './wallet.js';
 import { validateMnemonic, deriveAll } from './derive.js';
 import { previewWallet as previewEvm, sweepEvm, getProvider, CHAINS as EVM_CHAINS } from './evm.js';
-import { previewSolanaWallet, sweepSolana, getConnection } from './solana.js';
+import { previewSolanaWallet, sweepSolana, getConnection, selectSolanaKeypair } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
 import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
@@ -59,7 +59,7 @@ function readInputs() {
     solana: $('#family-solana').checked,
     bitcoin: $('#family-bitcoin').checked,
   };
-  // Solana and Bitcoin sweeps now both bridge to Ethereum USDC and land at
+  // Solana and Bitcoin sweeps both bridge to Ethereum USDC and land at
   // the EVM destination. Only the EVM destination is meaningful.
   const destinations = {
     evm: $('#dest-evm').value.trim(),
@@ -101,7 +101,6 @@ function validateInputs({ walletType, families, destinations, mnemonics }) {
     else if (!isEvmAddress(destinations.evm)) errors.push('EVM destination must be a valid 0x address.');
   }
   if (families.solana) {
-    // Solana sweeps bridge to Ethereum USDC delivered to the EVM destination.
     if (!destinations.evm) {
       errors.push('EVM destination is required when sweeping Solana (Solana output is bridged to Ethereum USDC).');
     } else if (!isEvmAddress(destinations.evm)) {
@@ -109,7 +108,6 @@ function validateInputs({ walletType, families, destinations, mnemonics }) {
     }
   }
   if (families.bitcoin) {
-    // Bitcoin sweeps bridge to Ethereum USDC delivered to the EVM destination.
     if (!destinations.evm) {
       errors.push('EVM destination is required when sweeping Bitcoin (BTC output is bridged to Ethereum USDC).');
     } else if (!isEvmAddress(destinations.evm)) {
@@ -141,8 +139,6 @@ function syncDestinationFields() {
   const solana = $('#family-solana').checked;
   const bitcoin = $('#family-bitcoin').checked;
   const evmWrap = $('#dest-evm-wrap');
-  // EVM destination is required if any family is selected — EVM sweeps use
-  // it directly, Solana and Bitcoin sweeps bridge to it as USDC.
   if (evmWrap) evmWrap.style.display = (evm || solana || bitcoin) ? '' : 'none';
   const chainList = $('#chain-list');
   if (chainList) chainList.style.display = evm ? '' : 'none';
@@ -152,20 +148,11 @@ function syncDestinationFields() {
 // CONNECT WALLET
 // =====================================================================
 
-/**
- * Read the selected wallet type from the radio group and connect.
- * Used by the primary connect flow (if any) — most connect buttons now
- * call connectWalletAndStoreForType directly.
- */
 async function connectWalletAndStore() {
   const { walletType } = readInputs();
   return connectWalletAndStoreForType(walletType);
 }
 
-/**
- * Force a specific wallet type and connect. Used by the per-section
- * connect buttons, which live inside their own wallet-type sections.
- */
 async function connectWalletAndStoreForType(walletType) {
   track.walletSelected(walletType);
   try {
@@ -287,10 +274,19 @@ async function runPreview() {
 
     if (inputs.families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
-      for (const { address, index } of state.derivedKeys.solana) {
-        logLine(`\nPreviewing Solana ${address}...`);
+      for (const { candidates, index } of state.derivedKeys.solana) {
+        logLine(`\nSelecting Solana derivation...`);
+        let selected;
         try {
-          const p = await previewSolanaWallet(conn, address);
+          selected = await selectSolanaKeypair(conn, candidates, logLine);
+        } catch (e) {
+          logLine(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
+          selected = candidates.find((c) => c.name === 'phantom') || candidates[0];
+        }
+
+        logLine(`\nPreviewing Solana ${selected.address}...`);
+        try {
+          const p = await previewSolanaWallet(conn, selected.address);
           state.previews.solana.push({ index, ...p });
           logLine(`  SOL: ${p.sol?.formatted ?? 0}`);
           logLine(`  tokens: ${p.tokens.length}`);
@@ -470,13 +466,25 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
-  // feeReceipts are all USDC raw units (6 decimals) now:
-  //   evm     — per chain, USDC that landed at the fee wallet on that chain
-  //   solana  — expected USDC delivered on Ethereum via deBridge
-  //   bitcoin — expected USDC delivered on Ethereum via THORChain
-  const feeReceipts = { evm: {}, solana: 0n, bitcoin: 0n };
+  // feeReceipts structure — all three families are per-source arrays now:
+  //   evm     — [{ chain, sourceAddress, amountRaw }]
+  //   solana  — [{ sourceAddress, amountRaw, orderIds }]
+  //   bitcoin — [{ sourceAddress, amountRaw, txids }]
+  //
+  // Each entry corresponds to one (family, source mnemonic) pair. The
+  // receipt builder emits one receipt per entry, so multi-mnemonic sweeps
+  // attribute contributions correctly.
+  const feeReceipts = { evm: [], solana: [], bitcoin: [] };
   const sponsoredGasByChain = {};
   const chainHadAnySuccess = {};
+
+  // Totals for the summary section.
+  const evmTotalForChain = (chain) =>
+    feeReceipts.evm
+      .filter((e) => e.chain === chain)
+      .reduce((sum, e) => sum + e.amountRaw, 0n);
+  const solanaTotal = () => feeReceipts.solana.reduce((sum, e) => sum + e.amountRaw, 0n);
+  const bitcoinTotal = () => feeReceipts.bitcoin.reduce((sum, e) => sum + e.amountRaw, 0n);
 
   try {
     if (families.evm) {
@@ -546,8 +554,15 @@ async function runSweep(live) {
 
             state.results.evm.push({ chain, address, ...sweepResult });
 
+            // Per-source attribution: one entry per (chain, mnemonic) pair.
             const chainReceived = BigInt(sweepResult.usdcReceivedRaw || '0');
-            feeReceipts.evm[chain] = (feeReceipts.evm[chain] || 0n) + chainReceived;
+            if (chainReceived > 0n) {
+              feeReceipts.evm.push({
+                chain,
+                sourceAddress: address,
+                amountRaw: chainReceived,
+              });
+            }
 
             for (const s of sweepResult.swaps) {
               const receivedNote = s.received ? ` (received ${s.received} USDC)` : '';
@@ -572,11 +587,20 @@ async function runSweep(live) {
 
     if (families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
-      for (const { keypair, address, index } of state.derivedKeys.solana) {
+      for (const { candidates, index } of state.derivedKeys.solana) {
+        // Re-run selection at sweep time — the wallet may have gained
+        // activity since preview.
+        let selected;
+        try {
+          selected = await selectSolanaKeypair(conn, candidates, logLine);
+        } catch (e) {
+          logLine(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
+          selected = candidates.find((c) => c.name === 'phantom') || candidates[0];
+        }
+
+        const { keypair, address } = selected;
         logLine(`\n[Solana] ${address}`);
         try {
-          // Pre-flight: deBridge order txs cost ~0.024 SOL (rent + fees).
-          // No sponsorship for Solana — skip if the wallet can't cover it.
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
           const SOL_MIN_FOR_ORDER = 30_000_000n; // 0.03 SOL
           if (solLamports < SOL_MIN_FOR_ORDER) {
@@ -586,7 +610,15 @@ async function runSweep(live) {
 
           const r = await sweepSolana(conn, keypair, { dryRun, userDestination: destinations.evm });
           state.results.solana.push({ index, ...r });
-          feeReceipts.solana += BigInt(r.usdcReceivedRaw || '0');
+
+          const amountRaw = BigInt(r.usdcReceivedRaw || '0');
+          if (amountRaw > 0n) {
+            feeReceipts.solana.push({
+              sourceAddress: address,
+              amountRaw,
+              orderIds: (r.swaps || []).filter((s) => s.orderId).map((s) => s.orderId),
+            });
+          }
 
           for (const s of r.swaps) {
             const mintLabel = s.mint === 'SOL' ? 'SOL' : s.mint.slice(0, 8);
@@ -611,13 +643,16 @@ async function runSweep(live) {
       for (const { keyPair, address, index } of state.derivedKeys.bitcoin) {
         logLine(`\n[Bitcoin] ${address}`);
         try {
-          const r = await sweepBitcoin(address, keyPair, { dryRun });
+          const r = await sweepBitcoin(address, keyPair, { dryRun, logLine });
           state.results.bitcoin.push({ index, ...r });
 
-          // feeReceipts.bitcoin is USDC raw units (6 decimals), sourced from
-          // sweepBitcoin's expectedUsdcOut — the swap output, not BTC sats.
-          if (r.expectedUsdcOut) {
-            feeReceipts.bitcoin += BigInt(r.expectedUsdcOut);
+          const usdcOut = BigInt(r.expectedUsdcOut || '0');
+          if (usdcOut > 0n) {
+            feeReceipts.bitcoin.push({
+              sourceAddress: address,
+              amountRaw: usdcOut,
+              txids: r.txid ? [r.txid] : [],
+            });
           }
 
           const receivedNote = r.expectedUsdcOut && r.expectedUsdcOut !== '0'
@@ -690,10 +725,10 @@ async function runSweep(live) {
 
     const chainsSwept = [];
     for (const chain of inputs.evmChains) {
-      if ((feeReceipts.evm[chain] || 0n) > 0n) chainsSwept.push(chain);
+      if (evmTotalForChain(chain) > 0n) chainsSwept.push(chain);
     }
-    if (feeReceipts.solana > 0n) chainsSwept.push('solana→eth');
-    if (feeReceipts.bitcoin > 0n) chainsSwept.push('bitcoin→eth');
+    if (solanaTotal() > 0n) chainsSwept.push('solana→eth');
+    if (bitcoinTotal() > 0n) chainsSwept.push('bitcoin→eth');
 
     const totalTokensProcessed = successes + failures;
 
@@ -715,7 +750,7 @@ async function runSweep(live) {
       let totalUsdValue = 0;
 
       for (const chain of inputs.evmChains) {
-        const received = feeReceipts.evm[chain] || 0n;
+        const received = evmTotalForChain(chain);
         if (received === 0n) continue;
         const decimals = chain === 'bnb' ? 18 : 6;
         const userAmount = userShare(received);
@@ -727,14 +762,16 @@ async function runSweep(live) {
         totalUsdValue += Number(ethers.formatUnits(netUserAmount, decimals));
       }
 
-      if (feeReceipts.solana > 0n) {
-        const userAmount = userShare(feeReceipts.solana);
+      const sTotal = solanaTotal();
+      if (sTotal > 0n) {
+        const userAmount = userShare(sTotal);
         logLine(`    ${'solana→eth'.padEnd(10)} ${ethers.formatUnits(userAmount, 6)} USDC (via deBridge)`);
         totalUsdValue += Number(ethers.formatUnits(userAmount, 6));
       }
 
-      if (feeReceipts.bitcoin > 0n) {
-        const userAmount = userShare(feeReceipts.bitcoin);
+      const bTotal = bitcoinTotal();
+      if (bTotal > 0n) {
+        const userAmount = userShare(bTotal);
         logLine(`    ${'bitcoin→eth'.padEnd(10)} ${ethers.formatUnits(userAmount, 6)} USDC (via THORChain)`);
         totalUsdValue += Number(ethers.formatUnits(userAmount, 6));
       }
@@ -752,70 +789,66 @@ async function runSweep(live) {
     // =================================================================
     // RECORD FEE ON THE WORKER
     // =================================================================
-    if (live && (Object.keys(feeReceipts.evm).length > 0 || feeReceipts.solana > 0n || feeReceipts.bitcoin > 0n)) {
+    const hasEvmReceipts = feeReceipts.evm.length > 0;
+    const hasSolanaReceipts = feeReceipts.solana.length > 0;
+    const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
+
+    if (live && (hasEvmReceipts || hasSolanaReceipts || hasBitcoinReceipts)) {
       try {
         const receipts = [];
 
-        for (const chain of inputs.evmChains) {
-          const received = feeReceipts.evm[chain] || 0n;
-          if (received === 0n) continue;
-          const decimals = chain === 'bnb' ? 18 : 6;
-          const sourceEntry = state.derivedKeys.evm.find((e) => {
-            const preview = state.previews.evm.find((p) => p.chain === chain && p.address === e.address);
-            return !!preview;
-          });
+        // One EVM receipt per (chain, source mnemonic) pair.
+        for (const entry of feeReceipts.evm) {
+          const decimals = entry.chain === 'bnb' ? 18 : 6;
           receipts.push({
             family: 'evm',
-            chain,
-            sourceAddress: sourceEntry?.address || null,
-            amountRaw: received.toString(),
+            chain: entry.chain,
+            sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(),
             decimals,
             symbol: 'USDC',
             recipient: FEE_WALLET_EVM,
             userDestination: destinations.evm,
-            userShareRaw: userShare(received).toString(),
-            operatorFeeRaw: operatorFee(received).toString(),
+            userShareRaw: userShare(entry.amountRaw).toString(),
+            operatorFeeRaw: operatorFee(entry.amountRaw).toString(),
           });
         }
 
-        if (feeReceipts.solana > 0n) {
+        // One Solana receipt per source mnemonic.
+        for (const entry of feeReceipts.solana) {
           receipts.push({
             family: 'solana',
-            sourceAddress: state.derivedKeys.solana[0]?.address || null,
-            amountRaw: feeReceipts.solana.toString(),
+            sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(),
             decimals: 6,
             symbol: 'USDC',
             recipient: FEE_WALLET_EVM,
             sourceChain: 'solana',
             destinationChain: 'ethereum',
             bridge: 'debridge',
-            orderIds: state.results.solana
-              .flatMap((r) => r.swaps || [])
-              .filter((s) => s.orderId)
-              .map((s) => s.orderId),
+            orderIds: entry.orderIds,
             userDestination: destinations.evm,
-            userShareRaw: userShare(feeReceipts.solana).toString(),
-            operatorFeeRaw: operatorFee(feeReceipts.solana).toString(),
+            userShareRaw: userShare(entry.amountRaw).toString(),
+            operatorFeeRaw: operatorFee(entry.amountRaw).toString(),
           });
         }
 
-        if (feeReceipts.bitcoin > 0n) {
+        // One Bitcoin receipt per source mnemonic.
+        for (const entry of feeReceipts.bitcoin) {
           receipts.push({
             family: 'bitcoin',
-            sourceAddress: state.derivedKeys.bitcoin[0]?.address || null,
-            amountRaw: feeReceipts.bitcoin.toString(),
+            sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(),
             decimals: 6,
             symbol: 'USDC',
             recipient: FEE_WALLET_EVM,
             sourceChain: 'bitcoin',
             destinationChain: 'ethereum',
             bridge: 'thorchain',
-            txids: state.results.bitcoin
-              .filter((r) => r.txid)
-              .map((r) => r.txid),
+            txids: entry.txids,
             userDestination: destinations.evm,
-            userShareRaw: userShare(feeReceipts.bitcoin).toString(),
-            operatorFeeRaw: operatorFee(feeReceipts.bitcoin).toString(),
+            userShareRaw: userShare(entry.amountRaw).toString(),
+            operatorFeeRaw: operatorFee(entry.amountRaw).toString(),
           });
         }
 
@@ -867,8 +900,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   syncDestinationFields();
 
-  // Bind each connect button to its wallet type. Previously all five buttons
-  // shared id="connect-button", so only the first one was ever wired up.
   const connectButtons = [
     ['#connect-button-extension',     'extension'],
     ['#connect-button-walletconnect', 'walletconnect'],

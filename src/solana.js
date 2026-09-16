@@ -56,6 +56,84 @@ export async function previewSolanaWallet(connection, walletAddress) {
 }
 
 // =====================================================================
+// DERIVATION SELECTION
+// =====================================================================
+//
+// The user's mnemonic can produce multiple valid Solana addresses depending
+// on which wallet they originally used. `derive.js` produces candidates for
+// the three main paths (Phantom, Trust Wallet, Ledger Live). This function
+// picks the one that actually has on-chain history.
+//
+// Selection order:
+//   1. Exactly one candidate has on-chain activity → pick it.
+//   2. Multiple candidates have activity → pick the most recently active,
+//      tiebreak to Phantom.
+//   3. All calls succeeded, none had activity → default to Phantom.
+//   4. RPC was unreachable for all candidates → default to Phantom, but
+//      log a WARN so the user knows the selection was not verified.
+//
+// The user never sees a choice; this runs automatically in both Preview
+// and Sweep.
+// =====================================================================
+
+export async function selectSolanaKeypair(connection, candidates, logLine) {
+  const withActivity = [];
+  let anyCallSucceeded = false;
+
+  for (const c of candidates) {
+    try {
+      const sigs = await connection.getSignaturesForAddress(
+        new PublicKey(c.address),
+        { limit: 1 }
+      );
+      anyCallSucceeded = true;
+      if (sigs.length > 0) {
+        withActivity.push({
+          ...c,
+          lastSeen: sigs[0].blockTime || 0,
+        });
+      }
+    } catch (e) {
+      // RPC failure for this candidate — don't treat as "no activity".
+      // We'll fall through to the phantom default below if nothing else
+      // was reachable, but the log will make it clear.
+    }
+  }
+
+  if (withActivity.length === 1) {
+    const picked = withActivity[0];
+    if (logLine) {
+      logLine(`  Auto-selected ${picked.name} derivation (${picked.address.slice(0, 8)}... has on-chain history)`);
+    }
+    return picked;
+  }
+
+  if (withActivity.length > 1) {
+    withActivity.sort((a, b) => b.lastSeen - a.lastSeen);
+    const phantom = withActivity.find((c) => c.name === 'phantom');
+    const picked = phantom || withActivity[0];
+    if (logLine) {
+      logLine(`  Multiple derivations have activity; using ${picked.name} (${picked.address.slice(0, 8)}...)`);
+    }
+    return picked;
+  }
+
+  const phantom = candidates.find((c) => c.name === 'phantom') || candidates[0];
+
+  if (!anyCallSucceeded) {
+    if (logLine) {
+      logLine(`  WARN: RPC unavailable for derivation selection; using ${phantom.name} default (${phantom.address.slice(0, 8)}...)`);
+    }
+    return phantom;
+  }
+
+  if (logLine) {
+    logLine(`  No on-chain activity found; defaulting to ${phantom.name} derivation (${phantom.address.slice(0, 8)}...)`);
+  }
+  return phantom;
+}
+
+// =====================================================================
 // DEBRIDGE — create cross-chain order
 // =====================================================================
 
