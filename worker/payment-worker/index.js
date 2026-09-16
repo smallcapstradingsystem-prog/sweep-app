@@ -25,15 +25,6 @@ const METHODS = {
   'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8, envAddress: 'CRYPTO_ADDRESS_BTC' },
 };
 
-// =====================================================================
-// GAS SPONSORSHIP
-// =====================================================================
-// The sponsor wallet funds gas for user wallets that can't pay for their
-// own sweeps. The key lives only as a Cloudflare secret.
-//
-// One RPC per chain. Uses public endpoints by default.
-// =====================================================================
-
 const SPONSOR_RPC = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
   arbitrum: 'https://arbitrum-one-rpc.publicnode.com',
@@ -43,8 +34,8 @@ const SPONSOR_RPC = {
   bnb:      'https://bsc-rpc.publicnode.com',
 };
 
-// Conservative max amount the sponsor will send in a single call, in wei.
-// Prevents a compromised client from draining the sponsor wallet.
+// Absolute ceiling on any single sponsorship call. Protects against a
+// compromised client sending huge shortfalls.
 const SPONSOR_MAX_WEI = {
   ethereum: '0.005',
   arbitrum: '0.0005',
@@ -53,6 +44,10 @@ const SPONSOR_MAX_WEI = {
   polygon:  '0.2',
   bnb:      '0.005',
 };
+
+// Rate limit: max N sponsorship requests per IP per window.
+const SPONSOR_RATE_MAX = 20;        // 20 calls
+const SPONSOR_RATE_WINDOW_MS = 10 * 60 * 1000;  // in 10 minutes
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -269,32 +264,15 @@ async function scanBitcoin(env, address, expectedRaw) {
 // =====================================================================
 // GAS SPONSORSHIP
 // =====================================================================
-//
-// POST /gas/sponsor
-// Body:
-//   {
-//     chain:       'base' | 'arbitrum' | ... ,
-//     toAddress:   '0xUSER...',
-//     targetWei:   '200000000000000'   // what the user wallet should have
-//   }
-//
-// The sponsor wallet sends the difference between the user's current
-// balance and targetWei, capped at SPONSOR_MAX_WEI for that chain.
-//
-// Returns:
-//   {
-//     ok: true,
-//     sent: '50000000000000',        // wei actually sent
-//     txHash: '0x...',
-//     balanceBefore: '...',
-//     balanceAfter: '...',
-//   }
-//
-// Errors are returned as { error: '...' } with a 4xx/5xx status.
-// =====================================================================
 
 async function handleGasSponsor(request, env) {
-  const { chain, toAddress, targetWei } = await request.json();
+  // ---- Rate limit by IP ----
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  if (!(await checkSponsorRate(env, ip))) {
+    return json({ error: 'rate limited — too many sponsor requests' }, 429);
+  }
+
+  const { chain, toAddress, shortfallWei } = await request.json();
 
   // ---- Validate ----
   if (!chain || !SPONSOR_RPC[chain]) {
@@ -303,13 +281,16 @@ async function handleGasSponsor(request, env) {
   if (!toAddress || !/^0x[a-fA-F0-9]{40}$/.test(toAddress)) {
     return json({ error: 'valid toAddress required' }, 400);
   }
-  if (!targetWei || !/^\d+$/.test(String(targetWei))) {
-    return json({ error: 'targetWei required (decimal string)' }, 400);
+  if (!shortfallWei || !/^\d+$/.test(String(shortfallWei))) {
+    return json({ error: 'shortfallWei required (decimal string)' }, 400);
   }
-  const target = BigInt(targetWei);
+  const shortfall = BigInt(shortfallWei);
+  if (shortfall === 0n) {
+    return json({ ok: true, sent: '0', reason: 'no shortfall' });
+  }
   const maxSend = ethers.parseEther(SPONSOR_MAX_WEI[chain]);
-  if (target > maxSend * 2n) {
-    return json({ error: `targetWei exceeds safe maximum for ${chain}` }, 400);
+  if (shortfall > maxSend) {
+    return json({ error: `shortfall exceeds safe maximum for ${chain}` }, 400);
   }
 
   if (!env.GAS_SPONSOR_KEY) {
@@ -321,28 +302,12 @@ async function handleGasSponsor(request, env) {
   const sponsorWallet = new ethers.Wallet(env.GAS_SPONSOR_KEY, provider);
   const sponsorAddress = await sponsorWallet.getAddress();
 
-  // ---- Read user's current balance ----
-  const balance = await provider.getBalance(toAddress);
-  if (balance >= target) {
-    return json({
-      ok: true,
-      sent: '0',
-      reason: 'user already funded',
-      balanceBefore: balance.toString(),
-      balanceAfter: balance.toString(),
-    });
-  }
-
-  // ---- Compute the top-up amount, capped at maxSend ----
-  let amount = target - balance;
-  if (amount > maxSend) amount = maxSend;
-
-  // ---- Check sponsor has enough for gas + amount ----
+  // ---- Check sponsor has enough ----
   const sponsorBalance = await provider.getBalance(sponsorAddress);
   const feeData = await provider.getFeeData();
   const gasPrice = feeData.gasPrice ?? 0n;
   const gasCost = gasPrice * 21000n;
-  const required = amount + gasCost;
+  const required = shortfall + gasCost;
   if (sponsorBalance < required) {
     return json({
       error: 'sponsor wallet is low on native gas',
@@ -357,19 +322,48 @@ async function handleGasSponsor(request, env) {
   try {
     const tx = await sponsorWallet.sendTransaction({
       to: toAddress,
-      value: amount,
+      value: shortfall,
     });
     await tx.wait(1);
     return json({
       ok: true,
-      sent: amount.toString(),
+      sent: shortfall.toString(),
       txHash: tx.hash,
-      balanceBefore: balance.toString(),
-      balanceAfter: (balance + amount).toString(),
     });
   } catch (e) {
     console.error('Sponsor send failed:', e);
     return json({ error: `sponsor send failed: ${e.message}` }, 500);
+  }
+}
+
+async function checkSponsorRate(env, ip) {
+  const key = `sponsor:rl:${ip}`;
+  const raw = await env.CREDITS.get(key);
+  const now = Date.now();
+
+  if (!raw) {
+    await env.CREDITS.put(key, JSON.stringify({ count: 1, reset: now + SPONSOR_RATE_WINDOW_MS }), {
+      expirationTtl: Math.ceil(SPONSOR_RATE_WINDOW_MS / 1000),
+    });
+    return true;
+  }
+
+  try {
+    const entry = JSON.parse(raw);
+    if (now > entry.reset) {
+      await env.CREDITS.put(key, JSON.stringify({ count: 1, reset: now + SPONSOR_RATE_WINDOW_MS }), {
+        expirationTtl: Math.ceil(SPONSOR_RATE_WINDOW_MS / 1000),
+      });
+      return true;
+    }
+    if (entry.count >= SPONSOR_RATE_MAX) return false;
+    entry.count += 1;
+    await env.CREDITS.put(key, JSON.stringify(entry), {
+      expirationTtl: Math.ceil((entry.reset - now) / 1000),
+    });
+    return true;
+  } catch {
+    return true; // fail-open on KV errors
   }
 }
 

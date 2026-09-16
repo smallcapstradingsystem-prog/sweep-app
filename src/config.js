@@ -13,52 +13,47 @@ export const FEE_WALLET_BITCOIN = 'bc1qcxzlxmqgxfzvduvkatd06kv4m2ch973r5gzakk';
 // =====================================================================
 // GAS SPONSOR WALLET (hot, only funds user gas)
 // =====================================================================
-//
-// Public address only — the private key lives on Cloudflare as the
-// GAS_SPONSOR_KEY secret. This wallet's job is to send small amounts
-// of native gas to user wallets that can't pay for their own sweeps.
-//
-// It is entirely separate from the fee wallet. If this key leaks, an
-// attacker can drain the sponsor wallet but never touch user USDC.
-// =====================================================================
 
 export const GAS_SPONSOR_ADDRESS = '0xb79312dd1CC7A67029060614108D9767333afF95';
 
 // =====================================================================
-// GAS SPONSORSHIP TARGETS
+// GAS SPONSORSHIP SHORTFALLS
 // =====================================================================
 //
-// When a user's wallet balance is below TARGET, the sponsor tops them
-// up to TARGET. This gives a small safety buffer beyond what a single
-// sweep costs (approve + swap + swap ...).
+// The sponsor sends only the SHORTFALL between the user's current
+// native balance and what a single transaction will cost. There is no
+// "target" balance.
 //
-// TARGETS are in wei-equivalent native token units:
-//   Ethereum mainnet: 0.003 ETH  (mainnet gas is expensive)
-//   Arbitrum / OP / Base: 0.0002 ETH
-//   Polygon: 0.1 POL
-//   BNB Chain: 0.002 BNB
+// PER_TX_COST is a conservative estimate of the gas cost for one
+// transaction (approve or swap) on each chain:
+//
+//   ethereum: 0.0008 ETH  (mainnet, expensive)
+//   arbitrum: 0.00002 ETH
+//   optimism: 0.00002 ETH
+//   base:     0.00002 ETH
+//   polygon:  0.01 POL
+//   bnb:      0.0002 BNB
+//
+// The retry loop handles cases where the estimate is too low — the
+// client will re-request sponsorship and try again, up to 5 times.
 // =====================================================================
 
-export const GAS_TARGETS = {
-  ethereum: '0.003',
-  arbitrum: '0.0002',
-  optimism: '0.0002',
-  base:     '0.0002',
-  polygon:  '0.1',
-  bnb:      '0.002',
+export const GAS_PER_TX_COST = {
+  ethereum: '0.0008',
+  arbitrum: '0.00002',
+  optimism: '0.00002',
+  base:     '0.00002',
+  polygon:  '0.01',
+  bnb:      '0.0002',
 };
 
-// The trigger below which we sponsor. If the wallet's balance is
-// already >= TRIGGER, we do nothing (even if it's below TARGET — it
-// means the wallet was funded externally).
-export const GAS_TRIGGERS = {
-  ethereum: '0.001',
-  arbitrum: '0.00005',
-  optimism: '0.00005',
-  base:     '0.00005',
-  polygon:  '0.02',
-  bnb:      '0.0005',
-};
+// The retry loop needs to know when a wallet has *enough* to attempt a
+// swap. We use the same per-tx cost as the threshold. If the wallet's
+// balance is below this, sponsor the shortfall to reach it.
+export const GAS_TRIGGERS = { ...GAS_PER_TX_COST };
+
+// Maximum number of sponsorship+swap retry attempts per chain per wallet.
+export const MAX_SPONSOR_ATTEMPTS = 5;
 
 // =====================================================================
 // SERVICE FEE (10% of user's sweep output)
@@ -80,20 +75,16 @@ export function operatorFee(amountRaw) {
 // GAS SPONSORSHIP FEE (deducted from user's 90%)
 // =====================================================================
 //
-// Charged in USD cents, subtracted from the user's share.
 // Rule:
 //   - If actual gas cost < $1.00, charge $1.00 flat
 //   - If actual gas cost >= $1.00, charge 2× actual
-//
-// Amounts are returned in USDC raw units (6 decimals) for convenience.
 // =====================================================================
 
 export function computeSponsorshipFeeUsdCents(actualGasCostUsdCents) {
-  if (actualGasCostUsdCents < 100) return 100;      // $1 minimum
-  return actualGasCostUsdCents * 2;                 // 2× actual
+  if (actualGasCostUsdCents < 100) return 100;
+  return actualGasCostUsdCents * 2;
 }
 
 export function usdCentsToUsdcRaw(cents) {
-  // 1 cent = 0.01 USDC = 10000 raw units (6 decimals)
-  return BigInt(cents) * 10000n;
+  return BigInt(cents) * 10000n; // 1 cent = 0.01 USDC = 10000 raw units
 }

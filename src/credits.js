@@ -117,26 +117,20 @@ export async function pollCryptoPayment(paymentId, { timeoutMs = 30 * 60 * 1000,
 // =====================================================================
 // GAS SPONSORSHIP
 // =====================================================================
-//
-// Ask the worker to send native gas from the sponsor wallet to a user
-// wallet that can't pay for its own transactions.
-//
-// The worker holds the sponsor wallet key. This client never sees it.
-// =====================================================================
 
 /**
  * Request gas sponsorship for a user wallet on a given chain.
+ * Sends exactly the shortfall amount, not a target balance.
  *
- * @param {string} chain       — 'base' | 'arbitrum' | 'optimism' | 'polygon' | 'bnb' | 'ethereum'
- * @param {string} toAddress   — the user's wallet address
- * @param {string} targetWei   — the amount (in wei) the wallet should have after sponsorship
- * @returns {Promise<{ ok: boolean, sent: string, txHash?: string, balanceBefore?: string, balanceAfter?: string, reason?: string }>}
+ * @param {string} chain           — 'base' | 'arbitrum' | ...
+ * @param {string} toAddress       — the user's wallet address
+ * @param {string} shortfallWei    — exact amount to send, in wei (decimal string)
  */
-export async function requestGasSponsorship(chain, toAddress, targetWei) {
+export async function requestGasSponsorship(chain, toAddress, shortfallWei) {
   const resp = await fetch(`${PAYMENT_WORKER_URL}/gas/sponsor`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chain, toAddress, targetWei }),
+    body: JSON.stringify({ chain, toAddress, shortfallWei }),
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
