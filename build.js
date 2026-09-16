@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import * as esbuild from "esbuild";
 import { createHash } from "crypto";
 import fs from "fs/promises";
@@ -20,7 +20,6 @@ const PATHS = {
 const HTML_TEMPLATES = [
   "app.html",
   "index.html",
-  "checkout-complete.html",
   "private-source.html",
 ];
 
@@ -86,6 +85,17 @@ async function renderTemplates(vars) {
   }
 }
 
+async function copyStaticAssets() {
+  // Copy non-template files from public/ that aren't build output.
+  // Right now that's just the marketing CSS, favicon, and the guide,
+  // terms, privacy, and security-policy pages that aren't rendered
+  // from templates. They live directly in public/ and need no work.
+  //
+  // This function exists as a placeholder in case you later move
+  // these into a src/static/ directory. Today it's a no-op.
+  return;
+}
+
 async function writeRelease(sri, sha256, size) {
   await fs.mkdir(PATHS.releases, { recursive: true });
   const date = new Date().toISOString();
@@ -121,6 +131,7 @@ async function main() {
   };
 
   await renderTemplates(vars);
+  await copyStaticAssets();
   await writeRelease(sri, sha256, size);
 
   console.log("\nBuild complete.");

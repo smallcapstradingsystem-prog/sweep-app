@@ -2,8 +2,6 @@
  * payment-worker.js — Cloudflare Worker
  * =====================================================================
  * Endpoints:
- *   POST /square/checkout    — create a Square payment link
- *   POST /square/verify      — verify a completed Square order, issue credits
  *   POST /crypto/quote       — generate a payment address + amount for crypto
  *   POST /crypto/verify      — check if crypto payment arrived, issue credits
  *   POST /credits/balance    — get credit balance for a client ID
@@ -16,8 +14,6 @@
  *   GET  /health             — health check
  *
  * Required secrets:
- *   SQUARE_ACCESS_TOKEN
- *   SQUARE_LOCATION_ID
  *   CRYPTO_ADDRESS_BASE      — 0x... receiving address on Base
  *   CRYPTO_ADDRESS_ETH       — 0x... receiving address on Ethereum
  *   CRYPTO_ADDRESS_SOL       — base58 receiving address on Solana
@@ -57,9 +53,6 @@ const METHODS = {
   'sol':           { chain: 'solana',   token: 'SOL',  decimals: 9,  envAddress: 'CRYPTO_ADDRESS_SOL'  },
   'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8,  envAddress: 'CRYPTO_ADDRESS_BTC'  },
 };
-
-const SQUARE_API = 'https://connect.squareup.com';
-const SQUARE_VERSION = '2024-08-21';
 
 const USDC_ADDRESSES = {
   base:     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
@@ -112,9 +105,6 @@ export default {
     try {
       if (path === '/health') return json({ ok: true, time: new Date().toISOString() }, 200, cors);
 
-      if (path === '/square/checkout' && request.method === 'POST') return await handleSquareCheckout(request, env, cors);
-      if (path === '/square/verify'   && request.method === 'POST') return await handleSquareVerify(request, env, cors);
-
       if (path === '/crypto/quote'  && request.method === 'POST') return await handleCryptoQuote(request, env, cors);
       if (path === '/crypto/verify' && request.method === 'POST') return await handleCryptoVerify(request, env, cors);
 
@@ -136,113 +126,6 @@ export default {
     }
   },
 };
-
-// =====================================================================
-// SQUARE
-// =====================================================================
-
-async function handleSquareCheckout(request, env, cors) {
-  const body = await request.json();
-  const { bundle = 'single', clientId } = body;
-
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required (min 16 chars)' }, 400, cors);
-  }
-
-  const bundleConfig = BUNDLES[bundle];
-  if (!bundleConfig) return json({ error: `unknown bundle: ${bundle}` }, 400, cors);
-
-  const redirectUrl = `https://sweep.yourdomain.com/checkout-complete.html?clientId=${encodeURIComponent(clientId)}`;
-
-  const squareBody = {
-    idempotency_key: crypto.randomUUID(),
-    quick_pay: {
-      name: `Sweep — ${bundleConfig.credits} sweep credit${bundleConfig.credits > 1 ? 's' : ''}`,
-      price_money: { amount: bundleConfig.priceCents, currency: 'USD' },
-      location_id: env.SQUARE_LOCATION_ID,
-    },
-    checkout_options: { redirect_url: redirectUrl, ask_for_shipping_address: false },
-  };
-
-  const resp = await fetch(`${SQUARE_API}/v2/online-checkout/payment-links`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${env.SQUARE_ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
-      'Square-Version': SQUARE_VERSION,
-    },
-    body: JSON.stringify(squareBody),
-  });
-
-  const data = await resp.json();
-  if (!resp.ok) {
-    console.error('Square API error:', JSON.stringify(data));
-    return json({ error: 'Square API error', details: data.errors }, 400, cors);
-  }
-
-  await env.PENDING_PAYMENTS.put(
-    `square:${data.payment_link.order_id}`,
-    JSON.stringify({
-      method: 'square',
-      clientId,
-      bundle,
-      credits: bundleConfig.credits,
-      priceCents: bundleConfig.priceCents,
-      orderId: data.payment_link.order_id,
-      createdAt: new Date().toISOString(),
-    }),
-    { expirationTtl: 60 * 60 * 24 }
-  );
-
-  return json({
-    url: data.payment_link.url,
-    order_id: data.payment_link.order_id,
-    bundle,
-    credits: bundleConfig.credits,
-  }, 200, cors);
-}
-
-async function handleSquareVerify(request, env, cors) {
-  const { orderId, clientId } = await request.json();
-  if (!orderId || !clientId) return json({ error: 'orderId and clientId required' }, 400, cors);
-
-  const existing = await env.CREDITS.get(`order:${orderId}`);
-  if (existing) return json({ ok: true, alreadyIssued: true, credits: parseInt(existing, 10) }, 200, cors);
-
-  const pendingRaw = await env.PENDING_PAYMENTS.get(`square:${orderId}`);
-  if (!pendingRaw) return json({ error: 'Order not found or expired' }, 404, cors);
-  const pending = JSON.parse(pendingRaw);
-
-  if (pending.clientId !== clientId) return json({ error: 'clientId mismatch' }, 403, cors);
-
-  const orderResp = await fetch(`${SQUARE_API}/v2/orders/${orderId}`, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${env.SQUARE_ACCESS_TOKEN}`,
-      'Square-Version': SQUARE_VERSION,
-    },
-  });
-  const orderData = await orderResp.json();
-  if (!orderResp.ok) return json({ error: 'Could not fetch order', details: orderData.errors }, 400, cors);
-
-  const order = orderData.order;
-  if (!order || order.state !== 'COMPLETED') {
-    return json({ error: `Order not completed (state: ${order?.state || 'unknown'})` }, 400, cors);
-  }
-
-  const balance = await addCredits(env, clientId, pending.credits, {
-    type: 'square',
-    orderId,
-    amountCents: pending.priceCents,
-    credits: pending.credits,
-  });
-
-  await env.CREDITS.put(`order:${orderId}`, pending.credits.toString(), {
-    expirationTtl: 60 * 60 * 24 * 365,
-  });
-
-  return json({ ok: true, creditsAdded: pending.credits, newBalance: balance }, 200, cors);
-}
 
 // =====================================================================
 // CRYPTO — QUOTE

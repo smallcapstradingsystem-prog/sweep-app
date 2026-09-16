@@ -150,22 +150,7 @@
                 <label><input type="radio" name="mode" value="dry-run" checked> Dry run (free, nothing broadcast)</label>
                 <label><input type="radio" name="mode" value="live"> Live (uses 1 credit, broadcasts real transactions)</label>
             </div>
-
-            <div id="live-warning" class="alert alert-warn" style="display:none; margin-top:16px;">
-                <strong>⚠ Before running a live sweep:</strong>
-                <ul style="margin: 8px 0 0 0; padding-left: 0; font-size: 14px; line-height: 1.7; list-style: none;">
-                    <li>Make sure each wallet has enough native gas or we will sponsor it for a fee:</li>
-                    <li style="padding-left: 20px; color: #8b949e; font-size: 13px; margin-top: 4px;">
-                        Ethereum mainnet: <strong>~0.005 ETH</strong><br>
-                        Base / Arbitrum / Optimism: <strong>~0.0002 ETH</strong><br>
-                        Polygon: <strong>~0.5 POL</strong><br>
-                        BNB Chain: <strong>~0.002 BNB</strong><br>
-                        Solana: <strong>~0.03 SOL</strong> (for deBridge order fees)
-                    </li>
-                    <li style="margin-top: 8px;">Wallets without gas will fail on that chain.</li>
-                </ul>
-            </div>
-
+            
             <div class="actions">
                 <button id="preview-button" class="btn btn-primary">Preview</button>
                 <button id="clear-button" class="btn btn-secondary">Clear</button>

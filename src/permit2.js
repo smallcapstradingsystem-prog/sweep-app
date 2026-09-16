@@ -6,17 +6,48 @@
  *
  * IMPORTANT: Permit2 only helps when the ROUTER natively supports it.
  * SwapRouter02 (used in evm.js today) does NOT — it pulls tokens via
- * `transferFrom`, which requires a normal `approve`.
+ * `transferFrom`, which requires a normal `approve`. The current EVM
+ * path routes through 0x's AllowanceHolder, which has its own approval
+ * flow and does not use Permit2.
  *
  * To actually benefit from Permit2, the app would need to swap through
  * Universal Router, which accepts a PERMIT2_PERMIT command bundled with
  * the swap. That migration is a separate project.
  *
+ * ETHERS VERSION NOTE
+ * --------------------
+ * The upstream `@uniswap/permit2-sdk` is built against ethers v5 and
+ * returns objects containing v5 BigNumber instances. This app uses
+ * ethers v6, which requires native BigInt. Passing v5 BigNumbers into
+ * ethers v6's `signTypedData` throws a type error:
+ *
+ *   Type 'BigNumber' is not assignable to type 'BigNumberish | null | undefined'
+ *
+ * Two ways to resolve this when you wire Permit2 up:
+ *
+ *   1. Install the community v6 fork instead of the upstream package:
+ *        npm install @ericxstone/permit2-sdk
+ *      and change the import below accordingly.
+ *
+ *   2. Keep the upstream package and rely on the `sanitizeForV6()`
+ *      helper in this file, which walks the permit data and converts
+ *      any v5 BigNumber instances to native BigInt before signing.
+ *
+ * This file currently uses option 2 (upstream package + sanitization)
+ * so it works with whatever is in package.json today, but the import
+ * is structured so switching to option 1 is a one-line change.
+ *
  * Reference:
  *   https://docs.uniswap.org/contracts/permit2/overview
+ *   https://github.com/Uniswap/sdks/issues/141
  */
 
 import { ethers } from 'ethers';
+
+// ---------------------------------------------------------------------
+// SDK import — switch this to the v6 fork when you migrate to Universal
+// Router. The rest of the file works with either.
+// ---------------------------------------------------------------------
 import {
   AllowanceTransfer,
   PERMIT2_ADDRESS,
@@ -29,22 +60,23 @@ import {
 // =====================================================================
 //
 // The SDK exports MaxAllowanceTransferAmount and MaxAllowanceExpiration
-// as ethers v5 BigNumber objects. We use ethers v6 in the rest of the
-// app, which expects native BigInt. Convert once at module load.
+// as ethers v5 BigNumber objects. Convert once at module load.
 //
 function toBigInt(x) {
   if (typeof x === 'bigint') return x;
   if (typeof x === 'number') return BigInt(x);
   if (typeof x === 'string') return BigInt(x);
-  if (x && typeof x.toHexString === 'function') return BigInt(x.toHexString());
-  if (x && x._hex) return BigInt(x._hex);
-  throw new Error('Cannot convert to BigInt: ' + x);
+  if (x == null) throw new Error('Cannot convert to BigInt: ' + x);
+  // ethers v5 BigNumber
+  if (typeof x.toHexString === 'function') return BigInt(x.toHexString());
+  if (typeof x._hex === 'string') return BigInt(x._hex);
+  // Last resort — string coercion
+  return BigInt(String(x));
 }
 
 const MAX_AMOUNT = toBigInt(MaxAllowanceTransferAmount);
 const MAX_EXPIRATION = Number(toBigInt(MaxAllowanceExpiration));
 
-// Sanity check: these should be 2^160-1 and 2^48-1
 if (MAX_AMOUNT !== (2n ** 160n) - 1n) {
   console.warn('[permit2] MAX_AMOUNT has unexpected value:', MAX_AMOUNT.toString());
 }
@@ -92,6 +124,47 @@ function getPermit2Address(chainId) {
 
 export function isPermit2Supported(chainId) {
   return typeof PERMIT2_DEPLOYED[Number(chainId)] === 'string';
+}
+
+/**
+ * Walk a permit data object and convert any ethers v5 BigNumber instances
+ * to native BigInt, so the result can be passed to ethers v6's
+ * `signTypedData`.
+ *
+ * Recursive: handles nested objects and arrays. Leaves strings, numbers,
+ * booleans, and existing BigInts untouched.
+ */
+function sanitizeForV6(value) {
+  if (value == null) return value;
+
+  // Already a BigInt
+  if (typeof value === 'bigint') return value;
+
+  // ethers v5 BigNumber detection
+  if (typeof value === 'object' && typeof value.toHexString === 'function' && value._hex !== undefined) {
+    return BigInt(value._hex);
+  }
+
+  // Alternative v5 BigNumber shape
+  if (typeof value === 'object' && typeof value._hex === 'string' && Object.keys(value).length <= 2) {
+    return BigInt(value._hex);
+  }
+
+  // Arrays — sanitize each element
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForV6);
+  }
+
+  // Plain objects — sanitize each field
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = sanitizeForV6(v);
+    }
+    return out;
+  }
+
+  return value;
 }
 
 // =====================================================================
@@ -152,7 +225,12 @@ export async function signPermitSingle(signer, { token, amount, spender, expirat
     chainId
   );
 
-  const signature = await signer.signTypedData(domain, types, values);
+  // Convert any residual v5 BigNumbers in the SDK's output to native
+  // BigInt so ethers v6's signTypedData can handle them.
+  const safeValues = sanitizeForV6(values);
+  const safeDomain = sanitizeForV6(domain);
+
+  const signature = await signer.signTypedData(safeDomain, types, safeValues);
 
   return { permitData: permitSingle, signature };
 }
@@ -192,7 +270,10 @@ export async function signPermitBatch(signer, tokens, spender, expirationSeconds
     chainId
   );
 
-  const signature = await signer.signTypedData(domain, types, values);
+  const safeValues = sanitizeForV6(values);
+  const safeDomain = sanitizeForV6(domain);
+
+  const signature = await signer.signTypedData(safeDomain, types, safeValues);
 
   return { permitData: permitBatch, signature };
 }
@@ -265,4 +346,4 @@ export async function ensurePermit2BatchApproval(signer, tokens, spender, opts =
 // EXPORTS
 // =====================================================================
 
-export { PERMIT2_ADDRESS, MAX_AMOUNT, MAX_EXPIRATION };
+export { PERMIT2_ADDRESS, MAX_AMOUNT, MAX_EXPIRATION, sanitizeForV6 };
