@@ -112,8 +112,25 @@
             </div>
 
             <h2 style="margin-top:32px;">2. Your destination address</h2>
-            <p class="hint">Where the USDC lands — a wallet you choose. Use a different address than your sweep wallets.</p>
-            <input id="destination" type="text" placeholder="0x... or Solana address or bc1q...">
+            <p class="hint">Where the swept funds land — a wallet you choose. Use a different address than your sweep wallets.</p>
+
+            <!-- EVM destination: shown when EVM family is checked -->
+            <div id="dest-evm-wrap" class="dest-field">
+                <label for="dest-evm" class="dest-label">EVM destination (receives USDC on each EVM chain)</label>
+                <input id="dest-evm" type="text" placeholder="0x..." autocomplete="off" spellcheck="false">
+            </div>
+
+            <!-- Solana destination: shown when Solana family is checked -->
+            <div id="dest-solana-wrap" class="dest-field" style="display:none;">
+                <label for="dest-solana" class="dest-label">Solana destination (receives USDC on Solana)</label>
+                <input id="dest-solana" type="text" placeholder="base58 address..." autocomplete="off" spellcheck="false">
+            </div>
+
+            <!-- Bitcoin destination: shown when Bitcoin family is checked -->
+            <div id="dest-bitcoin-wrap" class="dest-field" style="display:none;">
+                <label for="dest-bitcoin" class="dest-label">Bitcoin destination (receives BTC)</label>
+                <input id="dest-bitcoin" type="text" placeholder="bc1q... or 1... or 3..." autocomplete="off" spellcheck="false">
+            </div>
 
             <h2 style="margin-top:32px;">3. Families</h2>
             <div class="checks">
@@ -151,6 +168,7 @@
                         BNB Chain: <strong>~0.002 BNB</strong>
                     </li>
                     <li style="margin-top: 8px;">Wallets without gas will fail on that chain.</li>
+                    <li style="margin-top: 8px;">A <strong>10% service fee</strong> applies to all live sweeps.</li>
                 </ul>
             </div>
 
@@ -170,10 +188,11 @@
             <h2>How it works</h2>
             <ol style="padding-left: 24px; color: #8b949e; font-size: 14px; line-height: 1.8;">
                 <li>Pick a wallet source and provide its credentials.</li>
+                <li>Choose a destination address for each family you want to sweep.</li>
                 <li>Click <strong>Preview</strong> to derive addresses and see what's in each wallet.</li>
                 <li>Review the preview. Nothing has been broadcast.</li>
-                <li>Click <strong>Run</strong> to execute. Every transaction is signed locally.</li>
-                <li>Your USDC arrives at the destination address you chose.</li>
+                <li>Click <strong>Run</strong> to execute. A 10% service fee applies.</li>
+                <li>Your funds arrive at your chosen destinations (90% of the swept value).</li>
             </ol>
             <p style="margin-top: 20px; font-size: 14px;">
                 <a href="/guide.html">Read the full guide with wallet tips and troubleshooting →</a>

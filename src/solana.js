@@ -1,6 +1,6 @@
-import { getRpcUrl } from './rpc.js';
 import { Connection, PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount, getMint, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { FEE_WALLET_SOLANA } from './config.js';
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -8,8 +8,7 @@ const JUPITER_QUOTE = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP = 'https://quote-api.jup.ag/v6/swap';
 
 export function getConnection(rpcUrl) {
-  const url = rpcUrl || getRpcUrl('solana');
-  return new Connection(url, 'confirmed');
+  return new Connection(rpcUrl || 'https://api.mainnet-beta.solana.com', 'confirmed');
 }
 
 export async function previewSolanaWallet(connection, walletAddress) {
@@ -34,7 +33,11 @@ export async function previewSolanaWallet(connection, walletAddress) {
 }
 
 async function jupiterQuote(inputMint, outputMint, amount, slippageBps) {
-  const params = new URLSearchParams({ inputMint, outputMint, amount: amount.toString(), slippageBps: slippageBps.toString() });
+  const params = new URLSearchParams({
+    inputMint, outputMint,
+    amount: amount.toString(),
+    slippageBps: slippageBps.toString(),
+  });
   const resp = await fetch(`${JUPITER_QUOTE}?${params}`);
   if (!resp.ok) throw new Error(`Jupiter quote: ${resp.status}`);
   return resp.json();
@@ -44,7 +47,12 @@ async function jupiterSwap(quoteResponse, wallet) {
   const resp = await fetch(JUPITER_SWAP, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ quoteResponse, userPublicKey: wallet.publicKey.toBase58(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
+    body: JSON.stringify({
+      quoteResponse,
+      userPublicKey: wallet.publicKey.toBase58(),
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+    }),
   });
   if (!resp.ok) throw new Error(`Jupiter swap: ${resp.status}`);
   const { swapTransaction } = await resp.json();
@@ -73,11 +81,51 @@ async function transferSplToken(connection, keypair, mint, recipient, amount) {
   return sig;
 }
 
-export async function sweepSolana(connection, keypair, destination, opts = {}) {
-  const results = { address: keypair.publicKey.toBase58(), swaps: [], transfers: [], errors: [] };
+/**
+ * Sweep a Solana wallet to the fee wallet.
+ *
+ * All output USDC goes to FEE_WALLET_SOLANA. The operator forwards 90%
+ * to the user's Solana destination afterward.
+ *
+ * Returns:
+ *   {
+ *     address,
+ *     swaps, transfers, errors,
+ *     usdcReceivedRaw: string,   // total raw USDC that landed in fee wallet
+ *   }
+ */
+export async function sweepSolana(connection, keypair, opts = {}) {
+  const results = {
+    address: keypair.publicKey.toBase58(),
+    recipient: FEE_WALLET_SOLANA,
+    swaps: [],
+    transfers: [],
+    errors: [],
+    usdcReceivedRaw: '0',
+  };
   const slippage = opts.slippageBps ?? 100;
   const dryRun = !!opts.dryRun;
 
+  let usdcReceived = 0n;
+  const feeOwner = new PublicKey(FEE_WALLET_SOLANA);
+  let feeAta;
+  try {
+    feeAta = await getAssociatedTokenAddress(new PublicKey(USDC_MINT), feeOwner);
+  } catch (e) {
+    results.errors.push(`could not derive fee ATA: ${e.message}`);
+  }
+
+  const readFeeUsdcBalance = async () => {
+    if (!feeAta) return 0n;
+    try {
+      const acc = await getAccount(connection, feeAta);
+      return acc.amount;
+    } catch {
+      return 0n;
+    }
+  };
+
+  // Collect token accounts
   const tokenAccounts = [];
   for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
     try {
@@ -93,25 +141,38 @@ export async function sweepSolana(connection, keypair, destination, opts = {}) {
   for (const { mint, amount } of tokenAccounts) {
     try {
       if (mint === USDC_MINT) {
-        if (dryRun) results.transfers.push({ mint, status: 'DRY_RUN' });
-        else {
-          const sig = await transferSplToken(connection, keypair, mint, destination, amount);
-          results.transfers.push({ mint, signature: sig, status: 'SUCCESS' });
+        if (dryRun) {
+          results.transfers.push({ mint, status: 'DRY_RUN' });
+          usdcReceived += amount;
+        } else {
+          const before = await readFeeUsdcBalance();
+          const sig = await transferSplToken(connection, keypair, mint, FEE_WALLET_SOLANA, amount);
+          const after = await readFeeUsdcBalance();
+          const received = after > before ? after - before : 0n;
+          usdcReceived += received;
+          results.transfers.push({ mint, signature: sig, received: received.toString(), status: 'SUCCESS' });
         }
       } else {
-        if (dryRun) results.swaps.push({ mint, status: 'DRY_RUN' });
-        else {
+        if (dryRun) {
+          results.swaps.push({ mint, status: 'DRY_RUN' });
+        } else {
           const quote = await jupiterQuote(mint, USDC_MINT, amount.toString(), slippage);
+          const outRaw = BigInt(quote.outAmount);
           const tx = await jupiterSwap(quote, keypair);
+          const before = await readFeeUsdcBalance();
           const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
           const bh = await connection.getLatestBlockhash();
           await connection.confirmTransaction({ signature: sig, ...bh });
-          results.swaps.push({ mint, signature: sig, status: 'SUCCESS' });
+          const after = await readFeeUsdcBalance();
+          const received = after > before ? after - before : 0n;
+          usdcReceived += received;
+          results.swaps.push({ mint, signature: sig, expected: outRaw.toString(), received: received.toString(), status: 'SUCCESS' });
         }
       }
     } catch (e) { results.errors.push(`${mint.slice(0, 8)}: ${e.message}`); }
   }
 
+  // Native SOL → USDC
   try {
     const solBal = await connection.getBalance(keypair.publicKey);
     const reserve = 5_000_000n;
@@ -122,13 +183,18 @@ export async function sweepSolana(connection, keypair, destination, opts = {}) {
       } else {
         const quote = await jupiterQuote(SOL_MINT, USDC_MINT, swapAmount.toString(), slippage);
         const tx = await jupiterSwap(quote, keypair);
+        const before = await readFeeUsdcBalance();
         const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
         const bh = await connection.getLatestBlockhash();
         await connection.confirmTransaction({ signature: sig, ...bh });
-        results.swaps.push({ mint: 'SOL', signature: sig, status: 'SUCCESS' });
+        const after = await readFeeUsdcBalance();
+        const received = after > before ? after - before : 0n;
+        usdcReceived += received;
+        results.swaps.push({ mint: 'SOL', signature: sig, received: received.toString(), status: 'SUCCESS' });
       }
     }
   } catch (e) { results.errors.push(`SOL: ${e.message}`); }
 
+  results.usdcReceivedRaw = usdcReceived.toString();
   return results;
 }

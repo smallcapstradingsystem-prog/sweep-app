@@ -420,3 +420,20 @@ pre#run-log:empty::before {
     .modal-wide { max-width: 100%; }
     .bundle-list { grid-template-columns: 1fr; }
 }
+
+/* ---------- DESTINATION FIELDS ---------- */
+.dest-field {
+    margin-bottom: 16px;
+}
+.dest-field:last-child {
+    margin-bottom: 0;
+}
+.dest-label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+    font-weight: 500;
+}
