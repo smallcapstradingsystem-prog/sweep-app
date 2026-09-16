@@ -9,7 +9,6 @@
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
     <style>
-        /* Guide-specific styles */
         .guide {
             max-width: 780px;
             margin: 0 auto;
@@ -165,18 +164,17 @@
             </ol>
         </div>
 
-        <!-- ============================= -->
         <h2 id="overview">1. Overview</h2>
         <p>
             Sweep finds every token in your wallets across multiple chains, swaps them
-            all into USDC, and sends the USDC to a single destination address. It runs
+            all into USDC, and sends the USDC to a destination address you choose. It runs
             entirely in your browser — your keys never leave your device.
         </p>
         <p>The workflow has three stages:</p>
         <ol>
             <li><strong>Preview</strong> — the app derives your wallet addresses and shows you what's in each one. Nothing is signed, nothing is broadcast. Free, unlimited.</li>
             <li><strong>Buy a credit</strong> — one credit = one live sweep. You pay in crypto (USDC, ETH, SOL, or BTC). Credits never expire.</li>
-            <li><strong>Execute</strong> — the app swaps every token to USDC and sends the USDC to your destination address. Every transaction is signed locally.</li>
+            <li><strong>Execute</strong> — the app swaps every token to USDC and sends the USDC to the destination address you chose. Every transaction is signed locally.</li>
         </ol>
 
         <div class="guide-callout">
@@ -184,7 +182,6 @@
             exactly what the app will do — before you commit a credit.
         </div>
 
-        <!-- ============================= -->
         <h2 id="wallet-source">2. Choosing a wallet source</h2>
         <p>Sweep supports five wallet sources. Pick whichever matches how you hold your keys.</p>
 
@@ -239,11 +236,10 @@
             Solana and Bitcoin sweeping require a mnemonic.
         </div>
 
-        <!-- ============================= -->
         <h2 id="destination">3. Setting a destination</h2>
         <p>
             The destination is where the USDC lands after the sweep. It's the <em>only</em>
-            address that matters for output.
+            address that matters for output, and it's a wallet you choose.
         </p>
         <ul>
             <li>Use an address you control</li>
@@ -255,7 +251,6 @@
             to a stranger's wallet. There is no undo.
         </div>
 
-        <!-- ============================= -->
         <h2 id="chains">4. Selecting chains and families</h2>
         <p>Three families are supported:</p>
         <ul>
@@ -268,7 +263,6 @@
             fewer transactions. Uncheck everything except one chain for a focused test.
         </p>
 
-        <!-- ============================= -->
         <h2 id="preview">5. Running a preview</h2>
         <p>Click <strong>Preview</strong>. The app will:</p>
         <ol>
@@ -294,7 +288,6 @@
             untouched — that's correct behavior.
         </div>
 
-        <!-- ============================= -->
         <h2 id="credit">6. Buying a credit</h2>
         <p>
             One credit = one live sweep, regardless of how many wallets or chains you
@@ -322,7 +315,6 @@
             detected.
         </div>
 
-        <!-- ============================= -->
         <h2 id="live">7. Running a live sweep</h2>
         <p>Once you have credits, switch to <strong>Live</strong> mode and click <strong>Run</strong>.</p>
         <p>You'll be asked to type <code>LIVE_SWEEP_NOW</code> as a final confirmation.</p>
@@ -331,10 +323,10 @@
             <li>One credit is consumed</li>
             <li>For each wallet and chain, the app:
                 <ul>
-                    <li>Transfers any existing USDC to the destination</li>
+                    <li>Transfers any existing USDC to the destination you chose</li>
                     <li>Approves the Uniswap router to spend each token (one-time per token)</li>
                     <li>Simulates the swap to verify it will succeed</li>
-                    <li>Executes the swap, sending USDC directly to the destination</li>
+                    <li>Executes the swap, sending USDC directly to the destination you chose</li>
                 </ul>
             </li>
             <li>Native tokens (ETH/BNB/POL) are wrapped and swapped, with a reserve kept back for gas</li>
@@ -348,7 +340,6 @@
             <li><code>ERROR (...)</code> — something went wrong, see the reason</li>
         </ul>
 
-        <!-- ============================= -->
         <h2 id="troubleshooting">8. Troubleshooting</h2>
 
         <h3>"No credits available"</h3>
@@ -385,16 +376,10 @@
             5 minutes, verify the amount you sent matches what was shown.
         </p>
 
-        <h3>"Wrong passphrase" or "no license"</h3>
-        <p>
-            N/A for this build — no login required. If you see this error, contact support.
-        </p>
-
-        <!-- ============================= -->
         <h2 id="safety">9. Safety notes</h2>
         <ul>
             <li>
-                <strong>Verify the destination address.</strong> Type it, paste it, then
+                <strong>Verify your destination address.</strong> Type it, paste it, then
                 read it back character by character. Never trust your eyes at a glance.
             </li>
             <li>

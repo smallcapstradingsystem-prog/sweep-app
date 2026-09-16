@@ -13,6 +13,7 @@
             <a href="/" class="logo">⟠ Sweep</a>
             <div class="nav-links">
                 <a href="/">Home</a>
+                <a href="/guide.html">Guide</a>
                 <button id="buy-credits-button" class="btn btn-secondary btn-sm">Buy credits</button>
                 <span id="credits-badge" class="credits-badge credits-empty">No credits</span>
             </div>
@@ -21,7 +22,7 @@
 
     <main class="wrap" style="padding-top: 40px; padding-bottom: 60px;">
         <h1 style="margin-bottom: 8px;">Launch App</h1>
-                <p class="hint" style="margin-bottom: 32px;">
+        <p class="hint" style="margin-bottom: 32px;">
             Everything runs in your browser. No server sees your keys.
             <strong>Dry runs are free</strong> — credits are only used on live sweeps.
             First time here? <a href="/guide.html">Read the guide →</a>
@@ -116,8 +117,8 @@
                 <strong>Connected:</strong> <code id="connected-address"></code>
             </div>
 
-            <h2 style="margin-top:32px;">2. Destination address</h2>
-            <p class="hint">Where the USDC lands. Use a different address than your sweep wallets.</p>
+            <h2 style="margin-top:32px;">2. Your destination address</h2>
+            <p class="hint">Where the USDC lands — a wallet you choose. Use a different address than your sweep wallets.</p>
             <input id="destination" type="text" placeholder="0x... or Solana address or bc1q...">
 
             <h2 style="margin-top:32px;">3. Families</h2>
@@ -178,7 +179,7 @@
                 <li>Click <strong>Preview</strong> to derive addresses and see what's in each wallet.</li>
                 <li>Review the preview. Nothing has been broadcast.</li>
                 <li>Click <strong>Run</strong> to execute. Every transaction is signed locally.</li>
-                <li>Your USDC arrives at the destination address.</li>
+                <li>Your USDC arrives at the destination address you chose.</li>
             </ol>
             <p style="margin-top: 20px; font-size: 14px;">
                 <a href="/guide.html">Read the full guide with wallet tips and troubleshooting →</a>
@@ -189,7 +190,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 Sweep Labs. <a href="/">Home</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a></p>
+                <p>© 2026 Sweep Labs. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a></p>
                 <p style="font-size: 11px; color: #8b949e; margin-top: 12px;">
                     Built {%BUILD_DATE%} · bundle {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
                 </p>

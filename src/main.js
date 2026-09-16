@@ -49,7 +49,7 @@ function readInputs() {
 
 function validateInputs({ walletType, destination, families, mnemonics }) {
   const errors = [];
-  if (!destination) errors.push('Destination address is required');
+  if (!destination) errors.push('Please enter your destination address');
 
   if (walletType === 'mnemonic') {
     if (mnemonics.length === 0) errors.push('At least one mnemonic is required');
