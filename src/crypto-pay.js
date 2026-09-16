@@ -7,7 +7,7 @@ import { requestCryptoQuote, pollCryptoPayment } from './credits.js';
 import { el } from './ui.js';
 
 const BUNDLES = [
-  { id: 'pack-1',  label: '1 credit',  price: '$10',  hint: '$10.00 per sweep' },
+  { id: 'single',  label: '1 credit',  price: '$10',  hint: '$10.00 per sweep' },
   { id: 'pack-5',  label: '5 credits', price: '$20',  hint: '$4.00 per sweep' },
   { id: 'pack-10', label: '10 credits',price: '$40',  hint: '$4.00 per sweep' },
   { id: 'pack-25', label: '25 credits',price: '$80',  hint: '$3.20 per sweep', badge: 'Best value' },
@@ -27,70 +27,98 @@ let pollCancelled = false;
 export function showCryptoPaymentModal(defaultBundle = 'single') {
   return new Promise((resolve, reject) => {
     pollCancelled = false;
-    const modal = buildModal(defaultBundle, resolve, reject);
-    document.body.appendChild(modal);
+    const overlay = el('div', { class: 'modal-overlay' });
+    const modal = el('div', { class: 'modal modal-wide' });
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Everything below closes over `overlay` directly. No DOM lookups,
+    // no event-target walking, no fragility.
+    const ctx = {
+      overlay,
+      modal,
+      resolve,
+      reject,
+      cancel: () => {
+        pollCancelled = true;
+        overlay.remove();
+        reject(new Error('Cancelled'));
+      },
+    };
+
+    renderBundlePicker(ctx);
   });
 }
 
-function buildModal(defaultBundle, resolve, reject) {
-  const overlay = el('div', { class: 'modal-overlay' });
-  const modal = el('div', { class: 'modal modal-wide' });
-  overlay.appendChild(modal);
+// =====================================================================
+// RENDERERS
+// =====================================================================
+//
+// Each renderer replaces the modal's contents wholesale. They all take
+// the same `ctx` object so they can move forward (bundle → method →
+// payment) or backward (method → bundle) without querying the DOM.
+// =====================================================================
 
-  modal.appendChild(el('div', { class: 'modal-header' }, [
+function renderBundlePicker(ctx) {
+  ctx.modal.innerHTML = '';
+
+  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
     el('h2', { text: 'Buy sweep credits' }),
     el('button', {
       class: 'modal-close',
       text: '×',
-      onclick: () => { pollCancelled = true; overlay.remove(); reject(new Error('Cancelled')); },
+      onclick: ctx.cancel,
     }),
   ]));
 
   const body = el('div', { class: 'modal-body' });
-  modal.appendChild(body);
 
-  // ---- Step 1: pick a bundle ----
   body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
 
-  const bundleList = el('div', { class: 'bundle-list' });
+  const list = el('div', { class: 'bundle-list' });
   for (const b of BUNDLES) {
-    const btn = el('button', {
+    const card = el('button', {
       class: 'bundle-card' + (b.badge ? ' featured' : ''),
-      onclick: () => showMethodPicker(b, body, overlay, resolve, reject),
+      onclick: () => renderMethodPicker(ctx, b),
     }, [
       b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
       el('div', { class: 'bundle-label', text: b.label }),
       el('div', { class: 'bundle-price', text: b.price }),
       el('div', { class: 'bundle-hint', text: b.hint }),
     ].filter(Boolean));
-    bundleList.appendChild(btn);
+    list.appendChild(card);
   }
-  body.appendChild(bundleList);
-
-  return overlay;
+  body.appendChild(list);
+  ctx.modal.appendChild(body);
 }
 
-function showMethodPicker(bundle, body, overlay, resolve, reject) {
-  body.innerHTML = '';
+function renderMethodPicker(ctx, bundle) {
+  ctx.modal.innerHTML = '';
+
+  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
+    el('h2', { text: 'Buy sweep credits' }),
+    el('button', {
+      class: 'modal-close',
+      text: '×',
+      onclick: ctx.cancel,
+    }),
+  ]));
+
+  const body = el('div', { class: 'modal-body' });
 
   body.appendChild(el('button', {
     class: 'link-back',
     text: '← Back to bundles',
-    onclick: () => {
-      body.innerHTML = '';
-      const modal = overlay.querySelector('.modal');
-      modal.innerHTML = '';
-      modal.appendChild(buildModalContent(resolve, reject));
-    },
+    onclick: () => renderBundlePicker(ctx),
   }));
 
   body.appendChild(el('h3', { text: `Pay ${bundle.price} — choose a method` }));
 
-  const methodList = el('div', { class: 'crypto-methods' });
+  const list = el('div', { class: 'crypto-methods' });
   for (const m of METHODS) {
-    methodList.appendChild(el('button', {
+    list.appendChild(el('button', {
       class: 'crypto-method',
-      onclick: () => selectMethod(m, bundle, body, overlay, resolve, reject),
+      onclick: () => renderPayment(ctx, bundle, m),
     }, [
       el('span', { class: 'crypto-method-icon', text: m.icon }),
       el('div', {}, [
@@ -100,12 +128,32 @@ function showMethodPicker(bundle, body, overlay, resolve, reject) {
       el('span', { class: 'crypto-method-arrow', text: '→' }),
     ]));
   }
-  body.appendChild(methodList);
+  body.appendChild(list);
+  ctx.modal.appendChild(body);
 }
 
-async function selectMethod(method, bundle, body, overlay, resolve, reject) {
-  body.innerHTML = '';
+async function renderPayment(ctx, bundle, method) {
+  ctx.modal.innerHTML = '';
+
+  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
+    el('h2', { text: 'Buy sweep credits' }),
+    el('button', {
+      class: 'modal-close',
+      text: '×',
+      onclick: ctx.cancel,
+    }),
+  ]));
+
+  const body = el('div', { class: 'modal-body' });
+
+  body.appendChild(el('button', {
+    class: 'link-back',
+    text: '← Back to methods',
+    onclick: () => renderMethodPicker(ctx, bundle),
+  }));
+
   body.appendChild(el('p', { class: 'hint', text: 'Fetching quote...' }));
+  ctx.modal.appendChild(body);
 
   let quote;
   try {
@@ -116,7 +164,7 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
     body.appendChild(el('button', {
       class: 'btn btn-secondary',
       text: 'Try another method',
-      onclick: () => { overlay.remove(); showCryptoPaymentModal(bundle.id).then(resolve).catch(reject); },
+      onclick: () => renderMethodPicker(ctx, bundle),
     }));
     return;
   }
@@ -135,8 +183,11 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
   const qrContainer = el('div', { class: 'crypto-qr' });
   body.appendChild(qrContainer);
 
-  const qrPayload = buildQrPayload(quote);
-  QRCode.toCanvas(qrPayload, { width: 220, margin: 2 })
+  // QR payload is the raw address (not a payment URI). The unique
+  // fractional amount must be entered exactly; a QR that pre-fills
+  // it would risk truncation by the paying wallet, which would break
+  // the worker's exact-match payment detection.
+  QRCode.toCanvas(quote.address, { width: 220, margin: 2 })
     .then((canvas) => {
       canvas.style.background = '#fff';
       canvas.style.borderRadius = '8px';
@@ -154,7 +205,7 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
   body.appendChild(el('button', {
     class: 'btn btn-secondary btn-block',
     text: 'Cancel',
-    onclick: () => { pollCancelled = true; overlay.remove(); reject(new Error('Cancelled')); },
+    onclick: ctx.cancel,
   }));
 
   try {
@@ -171,7 +222,10 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
     status.appendChild(el('div', { class: 'success-icon', text: '✓' }));
     status.appendChild(el('p', { text: `Payment received! ${result.creditsAdded} credit${result.creditsAdded > 1 ? 's' : ''} added.` }));
 
-    setTimeout(() => { overlay.remove(); resolve(result); }, 1500);
+    setTimeout(() => {
+      ctx.overlay.remove();
+      ctx.resolve(result);
+    }, 1500);
   } catch (err) {
     if (pollCancelled) return;
     status.innerHTML = '';
@@ -179,37 +233,9 @@ async function selectMethod(method, bundle, body, overlay, resolve, reject) {
   }
 }
 
-function buildModalContent(resolve, reject) {
-  const fragment = document.createDocumentFragment();
-  fragment.appendChild(el('div', { class: 'modal-header' }, [
-    el('h2', { text: 'Buy sweep credits' }),
-    el('button', {
-      class: 'modal-close',
-      text: '×',
-      onclick: () => { pollCancelled = true; reject(new Error('Cancelled')); },
-    }),
-  ]));
-  const body = el('div', { class: 'modal-body' });
-  body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
-  const bundleList = el('div', { class: 'bundle-list' });
-  for (const b of BUNDLES) {
-    bundleList.appendChild(el('button', {
-      class: 'bundle-card' + (b.badge ? ' featured' : ''),
-      onclick: (e) => {
-        const overlay = e.target.closest('.modal-overlay');
-        showMethodPicker(b, overlay.querySelector('.modal-body'), overlay, resolve, reject);
-      },
-    }, [
-      b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
-      el('div', { class: 'bundle-label', text: b.label }),
-      el('div', { class: 'bundle-price', text: b.price }),
-      el('div', { class: 'bundle-hint', text: b.hint }),
-    ].filter(Boolean)));
-  }
-  body.appendChild(bundleList);
-  fragment.appendChild(body);
-  return fragment;
-}
+// =====================================================================
+// HELPERS
+// =====================================================================
 
 function field(label, value, copyable = false, highlight = false) {
   const f = el('div', { class: 'crypto-field' });
@@ -230,11 +256,4 @@ function field(label, value, copyable = false, highlight = false) {
     f.appendChild(btn);
   }
   return f;
-}
-
-function buildQrPayload(quote) {
-  if (quote.chain === 'bitcoin') return `bitcoin:${quote.address}?amount=${quote.amount}`;
-  if (quote.chain === 'solana') return `solana:${quote.address}?amount=${quote.amount}`;
-  if (quote.token === 'ETH') return `ethereum:${quote.address}?value=${quote.amount_raw}`;
-  return quote.address;
 }
