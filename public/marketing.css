@@ -58,7 +58,7 @@ a:hover { text-decoration: underline; }
 .btn:hover { text-decoration: none; }
 .btn-sm { padding: 6px 14px; font-size: 13px; }
 .btn-lg { padding: 14px 28px; font-size: 16px; }
-.btn-block { display: block; width: 100%; }
+.btn-block { display: block; width: 100%; white-space: nowrap; }
 .btn-primary { background: var(--primary); color: #fff; }
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-secondary { background: transparent; color: var(--text); border-color: #30363d; }
