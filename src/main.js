@@ -426,7 +426,6 @@ async function runSweep(live) {
     logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
     logLine('  EVM wallets with no gas will be sponsored for a fee.');
     logLine('  Solana and Bitcoin wallets must already hold enough native gas.');
-    logLine('A 10% service fee is applied at swap time by 0x / deBridge / THORChain.\n');
 
     let balance = await fetchBalance();
     if (balance < 1) {
@@ -444,7 +443,6 @@ async function runSweep(live) {
 
     const confirm = prompt(
       `This live sweep will consume 1 credit (you have ${balance}).\n` +
-      `A 10% service fee is deducted at swap time.\n` +
       `If any EVM wallet needs gas, a $1 minimum sponsorship fee applies.\n\n` +
       `Type LIVE_SWEEP_NOW to confirm:`
     );
