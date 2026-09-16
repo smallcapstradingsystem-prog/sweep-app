@@ -145,6 +145,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
 
 .problem-extra-block p strong {
     color: var(--text);
+    font-weight: 600;
 }
 
 .problem-extra-block ul {
