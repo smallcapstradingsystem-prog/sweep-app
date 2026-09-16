@@ -13,29 +13,22 @@ const ETH_USDC     = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
 const DEBRIDGE_API = 'https://dln.debridge.finance/v1.0';
 
-// Reject orders whose estimated output is below this (in USDC, 6dp).
 const MIN_DEBRIDGE_OUT_USDC = 1_000_000n;  // 1.00 USDC
 
 // Reserve kept behind on Solana after a sweep.
-//
-// Solana transactions and deBridge order rent are paid from the wallet's
-// own SOL balance. Estimated per-order cost:
-//
-//   giveOrderState    176 bytes = 2,115,840 lamports
-//   giveOrderWallet   165 bytes = 2,039,280 lamports
-//   nonceMaster        16 bytes = 1,002,240 lamports (first order only)
-//   tx fee + priority            ≈   405,000 lamports
-//   ─────────────────────────────────────────────────
-//   Total per order              ≈ 5,562,360 lamports (≈ 0.0056 SOL)
-//
-// Setting the reserve to 0.015 SOL leaves enough for one more order
-// after the sweep, with buffer for priority-fee volatility.
+// Per-order cost ≈ 0.0056 SOL (rent + tx + priority).
+// Reserve of 0.015 SOL leaves enough for one more order.
 const SOL_RESERVE_LAMPORTS = 15_000_000n;   // 0.015 SOL
 
 // Skip SOL sweeps below this — the SOL itself would be eaten by fees.
 const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n; // 0.01 SOL
 
-// Route Solana RPC through the Cloudflare proxy (Helius, no rate limits).
+// Affiliate fee: 10% of gross = 1/9 of net output. Not part of the
+// on-chain transaction; accrues inside the DLN program and is claimed
+// separately by affiliate-claim-worker.
+const AFFILIATE_FEE_BPS = 1000n;
+const BPS_DENOMINATOR = 10000n;
+
 const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
 
 export function getConnection() {
@@ -126,12 +119,6 @@ export async function selectSolanaKeypair(connection, candidates, logLine) {
 // =====================================================================
 // DEBRIDGE — create cross-chain order
 // =====================================================================
-//
-// The affiliate params below direct 10% of the input to
-// FEE_WALLET_SOLANA. On Solana, that fee is NOT auto-transferred —
-// it accrues inside the DLN program and is claimed periodically by
-// the affiliate-claim-worker.
-// =====================================================================
 
 async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDestination }) {
   const params = new URLSearchParams({
@@ -162,10 +149,6 @@ async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority, userDesti
   return json;
 }
 
-// =====================================================================
-// DEBRIDGE — sign and broadcast the returned VersionedTransaction
-// =====================================================================
-
 async function signAndSendDebridgeTx(connection, keypair, order) {
   const txBytes = Buffer.from(order.tx.data.replace(/^0x/, ''), 'hex');
   const tx = VersionedTransaction.deserialize(txBytes);
@@ -195,7 +178,14 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     swaps: [],
     transfers: [],
     errors: [],
+    // deBridge reports these figures as estimates. The user's actual
+    // USDC arrives minutes later, settled by a solver, and may vary
+    // slightly. The affiliate fee is not on-chain — it accrues inside
+    // the DLN program and is claimed by the affiliate-claim-worker.
     usdcReceivedRaw: '0',
+    userReceivedRaw: '0',
+    feeReceivedRaw: '0',
+    estimates: true,
   };
   const dryRun = !!opts.dryRun;
   const userDestination = opts.userDestination;
@@ -303,6 +293,13 @@ export async function sweepSolana(connection, keypair, opts = {}) {
     results.errors.push(`SOL: ${e.message}`);
   }
 
-  results.usdcReceivedRaw = usdcReceived.toString();
+  // The user receives usdcReceived in full. The affiliate fee accrues
+  // on the input side of the deBridge order, so from the client's view
+  // it's 1/9 of the net output (10% of gross).
+  const userNet = usdcReceived;
+  const feeEstimate = (userNet * AFFILIATE_FEE_BPS) / (BPS_DENOMINATOR - AFFILIATE_FEE_BPS);
+  results.userReceivedRaw = userNet.toString();
+  results.feeReceivedRaw = feeEstimate.toString();
+  results.usdcReceivedRaw = userNet.toString();
   return results;
 }

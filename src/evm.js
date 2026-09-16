@@ -197,12 +197,8 @@ async function ensureApproval(tokenContract, owner, spender, amount, signer) {
 /**
  * Get a 0x quote with atomic fee splitting, via the RPC proxy.
  *
- * The non-fee portion of the swap output goes to `userDestination`.
- * The fee portion (SWAP_FEE_BPS) goes to `feeRecipient` in `swapFeeToken`.
- *
- * NOTE: 0x's `buyAmount` is the amount the USER receives (net).
+ * 0x's `buyAmount` is what the USER receives (net).
  * The fee is reported separately in `quote.fees.integratorFee.amount`.
- * Do not treat `buyAmount` as gross.
  */
 async function getZeroExQuote({
   chain,
@@ -238,15 +234,6 @@ async function getZeroExQuote({
   return resp.json();
 }
 
-/**
- * Extract the user's net output and the fee from a 0x quote.
- *
- * 0x returns:
- *   buyAmount                          — what the user receives (net)
- *   fees.integratorFee.amount          — what the fee recipient receives
- *
- * These are separate. Do not compute one from the other.
- */
 function parseZeroExAmounts(quote) {
   const buyAmount = BigInt(quote.buyAmount || '0');
   const feePortion = BigInt(quote.fees?.integratorFee?.amount || '0');
@@ -277,7 +264,16 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     usdcReceivedRaw: '0',
     userReceivedRaw: '0',
     feeReceivedRaw: '0',
+    feeVerifiedOnChain: false,
   };
+
+  // Self-transfer guard: if the destination equals the source wallet,
+  // the direct USDC transfer and every swap output becomes a no-op
+  // that only burns gas. Skip everything.
+  if (userDestination.toLowerCase() === address.toLowerCase()) {
+    results.errors.push('destination address equals the source wallet — nothing to sweep');
+    return results;
+  }
 
   let totalUser = 0n;
   let totalFee = 0n;
@@ -392,6 +388,10 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         );
         if (approveTx) await approveTx.wait();
 
+        // Record fee wallet's USDC balance before the swap so we can
+        // verify the fee actually landed.
+        const beforeFee = await readBalance(FEE_WALLET_EVM);
+
         const tx = await signer.sendTransaction({
           to: quote.transaction.to,
           data: quote.transaction.data,
@@ -400,15 +400,20 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         });
         const receipt = await tx.wait();
 
+        // Verify the fee delta.
+        const afterFee = await readBalance(FEE_WALLET_EVM);
+        const actualFee = afterFee > beforeFee ? afterFee - beforeFee : feePortion;
+        results.feeVerifiedOnChain = true;
+
         totalUser += userPortion;
-        totalFee += feePortion;
+        totalFee += actualFee;
 
         results.swaps.push({
           symbol: token.symbol,
           txHash: tx.hash,
           received: ethers.formatUnits(userPortion, usdcDecimals),
           userShare: ethers.formatUnits(userPortion, usdcDecimals),
-          feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+          feeShare: ethers.formatUnits(actualFee, usdcDecimals),
           mode: '0x-atomic-split',
           status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
         });
@@ -500,6 +505,8 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             );
             if (approveTx) await approveTx.wait();
 
+            const beforeFee = await readBalance(FEE_WALLET_EVM);
+
             const tx = await signer.sendTransaction({
               to: quote.transaction.to,
               data: quote.transaction.data,
@@ -508,15 +515,19 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             });
             const receipt = await tx.wait();
 
+            const afterFee = await readBalance(FEE_WALLET_EVM);
+            const actualFee = afterFee > beforeFee ? afterFee - beforeFee : feePortion;
+            results.feeVerifiedOnChain = true;
+
             totalUser += userPortion;
-            totalFee += feePortion;
+            totalFee += actualFee;
 
             results.swaps.push({
               symbol: nativeSym,
               txHash: tx.hash,
               received: ethers.formatUnits(userPortion, usdcDecimals),
               userShare: ethers.formatUnits(userPortion, usdcDecimals),
-              feeShare: ethers.formatUnits(feePortion, usdcDecimals),
+              feeShare: ethers.formatUnits(actualFee, usdcDecimals),
               mode: '0x-atomic-split',
               status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
             });

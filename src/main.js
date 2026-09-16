@@ -595,11 +595,6 @@ async function runSweep(live) {
         const { keypair, address } = selected;
         logLine(`\n[Solana] ${address}`);
         try {
-          // Source-side fee check. Solana transactions and deBridge
-          // order rent are paid from the wallet's own SOL balance.
-          // The outer floor must be strictly greater than the reserve
-          // (0.015 SOL) so a wallet that passes it has funds left to
-          // sweep after the reserve is deducted.
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
           const SOL_MIN_FOR_ORDER = 25_000_000n; // 0.025 SOL = reserve (0.015) + one order (0.010)
           if (solLamports < SOL_MIN_FOR_ORDER) {
@@ -613,11 +608,9 @@ async function runSweep(live) {
           });
           state.results.solana.push({ index, ...r });
 
-          // deBridge affiliate fee accrues on the input side. The user
-          // receives usdcReceivedRaw in full; the fee is separate.
-          // Fee = 10% of gross = usdcReceivedRaw / 9.
-          const userTotal = BigInt(r.usdcReceivedRaw || '0');
-          const feePortion = (userTotal * 1000n) / 9000n;
+          // sweepSolana returns userReceivedRaw and feeReceivedRaw.
+          // Both are estimates — the actual USDC settles minutes later.
+          const feePortion = BigInt(r.feeReceivedRaw || '0');
           if (feePortion > 0n) {
             feeReceipts.solana.push({
               sourceAddress: address,
@@ -651,10 +644,8 @@ async function runSweep(live) {
           });
           state.results.bitcoin.push({ index, ...r });
 
-          // THORChain affiliate fee is taken at swap time from the gross.
-          // expectedUsdcOut is the user's net. Fee = net / 9.
-          const userTotal = BigInt(r.expectedUsdcOut || '0');
-          const feePortion = (userTotal * 1000n) / 9000n;
+          // sweepBitcoin returns userReceivedRaw and feeReceivedRaw.
+          const feePortion = BigInt(r.feeReceivedRaw || '0');
           if (feePortion > 0n) {
             feeReceipts.bitcoin.push({
               sourceAddress: address,
@@ -753,8 +744,6 @@ async function runSweep(live) {
 
       let totalUserValue = 0;
 
-      // EVM: userReceivedRaw is what the user got (0x buyAmount).
-      // feeReceivedRaw is what the fee wallet got (integratorFee).
       for (const r of state.results.evm) {
         const userPart = BigInt(r.userReceivedRaw || '0');
         if (userPart === 0n) continue;
@@ -763,19 +752,17 @@ async function runSweep(live) {
         totalUserValue += Number(ethers.formatUnits(userPart, decimals));
       }
 
-      // Solana: user receives usdcReceivedRaw in full.
       for (const r of state.results.solana) {
-        const userPart = BigInt(r.usdcReceivedRaw || '0');
+        const userPart = BigInt(r.userReceivedRaw || '0');
         if (userPart === 0n) continue;
-        logLine(`    ${'solana→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via deBridge)`);
+        logLine(`    ${'solana→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via deBridge, est.)`);
         totalUserValue += Number(ethers.formatUnits(userPart, 6));
       }
 
-      // Bitcoin: user receives expectedUsdcOut in full.
       for (const r of state.results.bitcoin) {
-        const userPart = BigInt(r.expectedUsdcOut || '0');
+        const userPart = BigInt(r.userReceivedRaw || '0');
         if (userPart === 0n) continue;
-        logLine(`    ${'bitcoin→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via THORChain)`);
+        logLine(`    ${'bitcoin→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via THORChain, est.)`);
         totalUserValue += Number(ethers.formatUnits(userPart, 6));
       }
 

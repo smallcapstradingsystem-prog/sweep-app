@@ -22,8 +22,13 @@ const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
 // the user receives 100% of the swap output.
 // =====================================================================
 
-const THOR_AFFILIATE_NAME = '';
+const THOR_AFFILIATE_NAME = 'sweep25';
 const THOR_AFFILIATE_BPS  = 1000;   // 10%
+
+// Affiliate fee as a fraction of the user's net output.
+// 10% of gross = 1/9 of net.
+const AFFILIATE_FEE_NUMERATOR   = 1000n;
+const AFFILIATE_FEE_DENOMINATOR = 9000n;
 
 const MIN_SEND_SATS = 10000;
 const FALLBACK_FEE_RATE = 2;
@@ -113,6 +118,9 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
     error: null,
     amountRaw: '0',
     expectedUsdcOut: '0',
+    userReceivedRaw: '0',
+    feeReceivedRaw: '0',
+    estimates: true,
     inboundAddress: null,
     memo: null,
     feeRate: null,
@@ -155,7 +163,14 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
     results.inboundAddress = quote.inbound_address;
     results.memo = quote.memo;
     results.amountRaw = String(sendToThorchain);
-    results.expectedUsdcOut = String(quote.expected_amount_out || '0');
+
+    // THORChain's expected_amount_out already has the affiliate fee
+    // deducted. The user receives that amount. The fee is 1/9 of it.
+    const userOut = BigInt(quote.expected_amount_out || '0');
+    const feeOut = (userOut * AFFILIATE_FEE_NUMERATOR) / AFFILIATE_FEE_DENOMINATOR;
+    results.expectedUsdcOut = userOut.toString();
+    results.userReceivedRaw = userOut.toString();
+    results.feeReceivedRaw = feeOut.toString();
 
     if (dryRun) {
       results.status = 'DRY_RUN';
