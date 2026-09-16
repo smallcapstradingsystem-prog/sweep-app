@@ -17,7 +17,7 @@ import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recor
 import { showCryptoPaymentModal } from './crypto-pay.js';
 import {
   userShare, operatorFee,
-  FEE_WALLET_EVM, FEE_WALLET_SOLANA, FEE_WALLET_BITCOIN,
+  FEE_WALLET_EVM, FEE_WALLET_BITCOIN,
   GAS_SPONSOR_ADDRESS, GAS_PER_TX_COST, MAX_SPONSOR_ATTEMPTS,
   computeSponsorshipFeeUsdCents, usdCentsToUsdcRaw,
 } from './config.js';
@@ -59,10 +59,12 @@ function readInputs() {
     solana: $('#family-solana').checked,
     bitcoin: $('#family-bitcoin').checked,
   };
+  // Solana and Bitcoin sweeps now both bridge to Ethereum USDC and land at
+  // the EVM destination. Only the EVM destination is meaningful.
   const destinations = {
     evm: $('#dest-evm').value.trim(),
-    solana: $('#dest-solana').value.trim(),
-    bitcoin: $('#dest-bitcoin').value.trim(),
+    solana: '',
+    bitcoin: '',
   };
   const evmChains = $$('#chain-list input[type=checkbox]:checked').map((cb) => cb.value);
 
@@ -99,20 +101,22 @@ function validateInputs({ walletType, families, destinations, mnemonics }) {
     else if (!isEvmAddress(destinations.evm)) errors.push('EVM destination must be a valid 0x address.');
   }
   if (families.solana) {
-    if (!destinations.solana) errors.push('Solana destination address is required.');
-    else if (!isSolanaAddress(destinations.solana)) errors.push('Solana destination must be a valid base58 address.');
+    // Solana sweeps bridge to Ethereum USDC delivered to the EVM destination.
+    if (!destinations.evm) {
+      errors.push('EVM destination is required when sweeping Solana (Solana output is bridged to Ethereum USDC).');
+    } else if (!isEvmAddress(destinations.evm)) {
+      errors.push('EVM destination must be a valid 0x address.');
+    }
   }
   if (families.bitcoin) {
-    if (!destinations.bitcoin) errors.push('Bitcoin destination address is required.');
-    else if (!isBitcoinAddress(destinations.bitcoin)) errors.push('Bitcoin destination must be a valid Bitcoin address.');
+    // Bitcoin sweeps bridge to Ethereum USDC delivered to the EVM destination.
+    if (!destinations.evm) {
+      errors.push('EVM destination is required when sweeping Bitcoin (BTC output is bridged to Ethereum USDC).');
+    } else if (!isEvmAddress(destinations.evm)) {
+      errors.push('EVM destination must be a valid 0x address.');
+    }
   }
 
-  if (families.solana && destinations.solana && isEvmAddress(destinations.solana)) {
-    warnings.push('Your Solana destination looks like an EVM address.');
-  }
-  if (families.bitcoin && destinations.bitcoin && isEvmAddress(destinations.bitcoin)) {
-    warnings.push('Your Bitcoin destination looks like an EVM address.');
-  }
   if (families.evm && destinations.evm && isSolanaAddress(destinations.evm) && !isEvmAddress(destinations.evm)) {
     warnings.push('Your EVM destination looks like a Solana address.');
   }
@@ -137,11 +141,9 @@ function syncDestinationFields() {
   const solana = $('#family-solana').checked;
   const bitcoin = $('#family-bitcoin').checked;
   const evmWrap = $('#dest-evm-wrap');
-  const solanaWrap = $('#dest-solana-wrap');
-  const bitcoinWrap = $('#dest-bitcoin-wrap');
-  if (evmWrap) evmWrap.style.display = evm ? '' : 'none';
-  if (solanaWrap) solanaWrap.style.display = solana ? '' : 'none';
-  if (bitcoinWrap) bitcoinWrap.style.display = bitcoin ? '' : 'none';
+  // EVM destination is required if any family is selected — EVM sweeps use
+  // it directly, Solana and Bitcoin sweeps bridge to it as USDC.
+  if (evmWrap) evmWrap.style.display = (evm || solana || bitcoin) ? '' : 'none';
   const chainList = $('#chain-list');
   if (chainList) chainList.style.display = evm ? '' : 'none';
 }
@@ -150,8 +152,21 @@ function syncDestinationFields() {
 // CONNECT WALLET
 // =====================================================================
 
+/**
+ * Read the selected wallet type from the radio group and connect.
+ * Used by the primary connect flow (if any) — most connect buttons now
+ * call connectWalletAndStoreForType directly.
+ */
 async function connectWalletAndStore() {
   const { walletType } = readInputs();
+  return connectWalletAndStoreForType(walletType);
+}
+
+/**
+ * Force a specific wallet type and connect. Used by the per-section
+ * connect buttons, which live inside their own wallet-type sections.
+ */
+async function connectWalletAndStoreForType(walletType) {
   track.walletSelected(walletType);
   try {
     if (walletType === 'mnemonic') { logLine('Mnemonic mode: keys will be derived during Preview.'); return; }
@@ -323,7 +338,13 @@ async function requirePayment() {
 }
 
 // =====================================================================
-// GAS SPONSORSHIP
+// GAS SPONSORSHIP (EVM only)
+// =====================================================================
+// Solana and Bitcoin do not use sponsorship:
+//   - Solana order fees are ~$0.001 and partly refundable; the sweep is
+//     simply skipped if the wallet doesn't already hold enough SOL.
+//   - Bitcoin is the fee asset itself — the sweep deducts the network fee
+//     from the swept UTXOs.
 // =====================================================================
 
 async function ensureWalletGasOnce(chain, walletAddress) {
@@ -405,8 +426,8 @@ async function runSweep(live) {
 
   if (live) {
     logLine('\n⚠ Reminder: each wallet needs native gas to broadcast.');
-    logLine('  If a wallet is empty, the app will sponsor gas for it.');
-    logLine('  A sponsorship fee of $1 minimum applies to sponsored sweeps.');
+    logLine('  EVM wallets with no gas will be sponsored for a fee.');
+    logLine('  Solana and Bitcoin wallets must already hold enough native gas.');
     logLine('A 10% service fee applies to the swept value.\n');
 
     let balance = await fetchBalance();
@@ -426,7 +447,7 @@ async function runSweep(live) {
     const confirm = prompt(
       `This live sweep will consume 1 credit (you have ${balance}).\n` +
       `A 10% service fee is applied to the swept value.\n` +
-      `If any wallet needs gas, a $1 minimum sponsorship fee applies.\n\n` +
+      `If any EVM wallet needs gas, a $1 minimum sponsorship fee applies.\n\n` +
       `Type LIVE_SWEEP_NOW to confirm:`
     );
     if (confirm !== 'LIVE_SWEEP_NOW') { logLine('Live sweep cancelled.'); return; }
@@ -449,6 +470,10 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
+  // feeReceipts are all USDC raw units (6 decimals) now:
+  //   evm     — per chain, USDC that landed at the fee wallet on that chain
+  //   solana  — expected USDC delivered on Ethereum via deBridge
+  //   bitcoin — expected USDC delivered on Ethereum via THORChain
   const feeReceipts = { evm: {}, solana: 0n, bitcoin: 0n };
   const sponsoredGasByChain = {};
   const chainHadAnySuccess = {};
@@ -550,18 +575,30 @@ async function runSweep(live) {
       for (const { keypair, address, index } of state.derivedKeys.solana) {
         logLine(`\n[Solana] ${address}`);
         try {
-          const r = await sweepSolana(conn, keypair, { dryRun });
+          // Pre-flight: deBridge order txs cost ~0.024 SOL (rent + fees).
+          // No sponsorship for Solana — skip if the wallet can't cover it.
+          const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
+          const SOL_MIN_FOR_ORDER = 30_000_000n; // 0.03 SOL
+          if (solLamports < SOL_MIN_FOR_ORDER) {
+            logLine(`  SKIPPED: needs ~0.03 SOL for deBridge order fees (has ${(Number(solLamports) / 1e9).toFixed(4)} SOL)`);
+            continue;
+          }
+
+          const r = await sweepSolana(conn, keypair, { dryRun, userDestination: destinations.evm });
           state.results.solana.push({ index, ...r });
           feeReceipts.solana += BigInt(r.usdcReceivedRaw || '0');
+
           for (const s of r.swaps) {
-            const receivedNote = s.received ? ` (received ${s.received} raw)` : '';
-            logLine(`  swap ${s.mint.slice(0, 8)}: ${s.status} ${s.signature || ''}${receivedNote}`);
+            const mintLabel = s.mint === 'SOL' ? 'SOL' : s.mint.slice(0, 8);
+            const receivedNote = s.received ? ` (expected ${ethers.formatUnits(BigInt(s.received), 6)} USDC on Ethereum)` : '';
+            const orderNote = s.orderId ? ` order=${s.orderId.slice(0, 10)}...` : '';
+            const note = s.note ? ` (${s.note})` : '';
+            logLine(`  bridge ${mintLabel}: ${s.status} ${s.signature || ''}${orderNote}${receivedNote}${note}${s.error ? ' — ' + s.error : ''}`);
             if (s.status === 'SUCCESS') successes++;
             if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
           }
           for (const t of r.transfers) {
-            const receivedNote = t.received ? ` (received ${t.received} raw)` : '';
-            logLine(`  transfer ${t.mint.slice(0, 8)}: ${t.status} ${t.signature || ''}${receivedNote}`);
+            logLine(`  transfer ${t.mint.slice(0, 8)}: ${t.status}`);
             if (t.status === 'SUCCESS') successes++;
             if (t.status === 'FAILED' || t.status === 'ERROR') failures++;
           }
@@ -576,9 +613,17 @@ async function runSweep(live) {
         try {
           const r = await sweepBitcoin(address, keyPair, { dryRun });
           state.results.bitcoin.push({ index, ...r });
-          feeReceipts.bitcoin += BigInt(r.amountRaw || '0');
-          const receivedNote = r.amountRaw && r.amountRaw !== '0' ? ` (received ${r.amountRaw} sats)` : '';
-          logLine(`  ${r.status} ${r.txid || ''} ${r.error || ''}${receivedNote}`);
+
+          // feeReceipts.bitcoin is USDC raw units (6 decimals), sourced from
+          // sweepBitcoin's expectedUsdcOut — the swap output, not BTC sats.
+          if (r.expectedUsdcOut) {
+            feeReceipts.bitcoin += BigInt(r.expectedUsdcOut);
+          }
+
+          const receivedNote = r.expectedUsdcOut && r.expectedUsdcOut !== '0'
+            ? ` (expected ${ethers.formatUnits(BigInt(r.expectedUsdcOut), 6)} USDC on Ethereum)`
+            : '';
+          logLine(`  bridge btc→eth: ${r.status} ${r.txid || ''}${receivedNote}${r.error ? ' — ' + r.error : ''}`);
           if (r.status === 'SUCCESS') successes++;
           if (r.status === 'ERROR' || r.status === 'BROADCAST_ERROR') failures++;
         } catch (e) { logLine(`  FATAL: ${e.message}`); }
@@ -588,7 +633,7 @@ async function runSweep(live) {
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
     // =================================================================
-    // COMPUTE GAS SPONSORSHIPS (needed for the worker receipt)
+    // COMPUTE GAS SPONSORSHIPS (EVM only)
     // =================================================================
     const gasSponsorships = [];
 
@@ -638,9 +683,6 @@ async function runSweep(live) {
     // =================================================================
     // USER-FACING SUMMARY
     // =================================================================
-    // This is what the USER sees. It shows them what they'll receive
-    // and roughly when. No fee wallet addresses, no internal details.
-    // =================================================================
     logLine('');
     logLine('═══════════════════════════════════════════════════════════');
     logLine('SWEEP SUMMARY');
@@ -650,8 +692,8 @@ async function runSweep(live) {
     for (const chain of inputs.evmChains) {
       if ((feeReceipts.evm[chain] || 0n) > 0n) chainsSwept.push(chain);
     }
-    if (feeReceipts.solana > 0n) chainsSwept.push('solana');
-    if (feeReceipts.bitcoin > 0n) chainsSwept.push('bitcoin');
+    if (feeReceipts.solana > 0n) chainsSwept.push('solana→eth');
+    if (feeReceipts.bitcoin > 0n) chainsSwept.push('bitcoin→eth');
 
     const totalTokensProcessed = successes + failures;
 
@@ -663,10 +705,7 @@ async function runSweep(live) {
     }
     logLine('');
 
-    // Compute what the user will receive (in USD equivalent)
-    // We show the total, per chain.
     if (dryRun) {
-      // Dry run — just say the preview was successful
       logLine('  This was a dry run. No funds were moved.');
       logLine('  Run in Live mode to execute the sweep.');
     } else {
@@ -690,27 +729,19 @@ async function runSweep(live) {
 
       if (feeReceipts.solana > 0n) {
         const userAmount = userShare(feeReceipts.solana);
-        logLine(`    ${'solana'.padEnd(10)} ${ethers.formatUnits(userAmount, 6)} USDC`);
+        logLine(`    ${'solana→eth'.padEnd(10)} ${ethers.formatUnits(userAmount, 6)} USDC (via deBridge)`);
         totalUsdValue += Number(ethers.formatUnits(userAmount, 6));
       }
 
       if (feeReceipts.bitcoin > 0n) {
         const userAmount = userShare(feeReceipts.bitcoin);
-        const btcAmount = Number(userAmount) / 1e8;
-        // BTC is not USDC — fetch price for USD display
-        let btcPriceUsd = 0;
-        try {
-          const resp = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd`);
-          const data = await resp.json();
-          btcPriceUsd = data.bitcoin?.usd || 0;
-        } catch {}
-        logLine(`    ${'bitcoin'.padEnd(10)} ${btcAmount.toFixed(8)} BTC${btcPriceUsd ? ` (~$${(btcAmount * btcPriceUsd).toFixed(2)})` : ''}`);
-        totalUsdValue += btcAmount * btcPriceUsd;
+        logLine(`    ${'bitcoin→eth'.padEnd(10)} ${ethers.formatUnits(userAmount, 6)} USDC (via THORChain)`);
+        totalUsdValue += Number(ethers.formatUnits(userAmount, 6));
       }
 
       logLine('');
       logLine(`  Total value:       ~$${totalUsdValue.toFixed(2)}`);
-      logLine(`  Destination:       ${destinations.evm || destinations.solana || destinations.bitcoin || '(not set)'}`);
+      logLine(`  Destination:       ${destinations.evm || '(not set)'}`);
       logLine(`  Estimated time:    within a few minutes`);
       logLine('');
       logLine('  Thank you for using Sweeper.');
@@ -719,7 +750,7 @@ async function runSweep(live) {
     logLine('═══════════════════════════════════════════════════════════');
 
     // =================================================================
-    // RECORD FEE ON THE WORKER (includes operator view for you)
+    // RECORD FEE ON THE WORKER
     // =================================================================
     if (live && (Object.keys(feeReceipts.evm).length > 0 || feeReceipts.solana > 0n || feeReceipts.bitcoin > 0n)) {
       try {
@@ -754,8 +785,15 @@ async function runSweep(live) {
             amountRaw: feeReceipts.solana.toString(),
             decimals: 6,
             symbol: 'USDC',
-            recipient: FEE_WALLET_SOLANA,
-            userDestination: destinations.solana,
+            recipient: FEE_WALLET_EVM,
+            sourceChain: 'solana',
+            destinationChain: 'ethereum',
+            bridge: 'debridge',
+            orderIds: state.results.solana
+              .flatMap((r) => r.swaps || [])
+              .filter((s) => s.orderId)
+              .map((s) => s.orderId),
+            userDestination: destinations.evm,
             userShareRaw: userShare(feeReceipts.solana).toString(),
             operatorFeeRaw: operatorFee(feeReceipts.solana).toString(),
           });
@@ -766,10 +804,16 @@ async function runSweep(live) {
             family: 'bitcoin',
             sourceAddress: state.derivedKeys.bitcoin[0]?.address || null,
             amountRaw: feeReceipts.bitcoin.toString(),
-            decimals: 8,
-            symbol: 'BTC',
-            recipient: FEE_WALLET_BITCOIN,
-            userDestination: destinations.bitcoin,
+            decimals: 6,
+            symbol: 'USDC',
+            recipient: FEE_WALLET_EVM,
+            sourceChain: 'bitcoin',
+            destinationChain: 'ethereum',
+            bridge: 'thorchain',
+            txids: state.results.bitcoin
+              .filter((r) => r.txid)
+              .map((r) => r.txid),
+            userDestination: destinations.evm,
             userShareRaw: userShare(feeReceipts.bitcoin).toString(),
             operatorFeeRaw: operatorFee(feeReceipts.bitcoin).toString(),
           });
@@ -823,8 +867,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   syncDestinationFields();
 
-  const connectBtn = $('#connect-button');
-  if (connectBtn) connectBtn.addEventListener('click', connectWalletAndStore);
+  // Bind each connect button to its wallet type. Previously all five buttons
+  // shared id="connect-button", so only the first one was ever wired up.
+  const connectButtons = [
+    ['#connect-button-extension',     'extension'],
+    ['#connect-button-walletconnect', 'walletconnect'],
+    ['#connect-button-ledger',        'ledger'],
+    ['#connect-button-trezor',        'trezor'],
+  ];
+  for (const [sel, type] of connectButtons) {
+    const btn = $(sel);
+    if (!btn) continue;
+    btn.addEventListener('click', () => connectWalletAndStoreForType(type));
+  }
 
   $('#preview-button').addEventListener('click', runPreview);
   $('#run-button').addEventListener('click', () => runSweep(state.mode === 'live'));
@@ -842,8 +897,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearAll();
     $('#phrases').value = '';
     $('#dest-evm').value = '';
-    $('#dest-solana').value = '';
-    $('#dest-bitcoin').value = '';
     clearLog();
     hide('#run-button');
     hide('#connected-banner');

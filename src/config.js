@@ -34,6 +34,12 @@ export const GAS_SPONSOR_ADDRESS = '0xb79312dd1CC7A67029060614108D9767333afF95';
 //   polygon:  0.01 POL
 //   bnb:      0.0002 BNB
 //
+// Solana is deliberately NOT in this table. Solana tx fees are ~$0.001,
+// and part of the deBridge order's cost is refundable rent. Sponsoring
+// it would be sponsoring a loan for no economic reason. Solana sweeps
+// require the user to already hold a small SOL balance; if they don't,
+// the sweep is skipped client-side.
+//
 // The retry loop handles cases where the estimate is too low — the
 // client will re-request sponsorship and try again, up to 5 times.
 // =====================================================================

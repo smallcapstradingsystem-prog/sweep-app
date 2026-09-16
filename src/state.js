@@ -2,7 +2,7 @@ export const state = {
   // Inputs
   walletType: 'mnemonic',
   mnemonics: [],
-  destination: '',
+  destinations: { evm: '', solana: '', bitcoin: '' },  // was: destination: ''
   families: { evm: true, solana: false, bitcoin: false },
   evmChains: ['base', 'optimism', 'arbitrum'],
   mode: 'dry-run',
@@ -30,6 +30,6 @@ export function resetState() {
 
 export function clearAll() {
   state.mnemonics = [];
-  state.destination = '';
+  state.destinations = { evm: '', solana: '', bitcoin: '' };
   resetState();
 }

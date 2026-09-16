@@ -1,8 +1,18 @@
 import * as bitcoin from 'bitcoinjs-lib';
-import { FEE_WALLET_BITCOIN } from './config.js';
+import { FEE_WALLET_EVM } from './config.js';
 
 const NETWORK = bitcoin.networks.bitcoin;
 const MEMPOOL_API = 'https://mempool.space/api';
+const THORCHAIN_QUOTE_API = 'https://swap.thorchain.org/api/v1/quote';
+
+// THORChain asset notation for Ethereum mainnet USDC.
+// Format: CHAIN.SYMBOL-CONTRACT (contract uppercased, 0x prefix kept).
+const BTC_ASSET = 'BTC.BTC';
+const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
+
+// Below this, the swap is almost certainly not worth it — THORChain's
+// outbound fees and slippage will eat most of the value.
+const MIN_SEND_SATS = 10000;
 
 export async function previewBitcoinWallet(address) {
   const result = { address, utxos: [], balance: 0 };
@@ -17,26 +27,69 @@ export async function previewBitcoinWallet(address) {
 }
 
 /**
- * Sweep Bitcoin to the fee wallet.
+ * Fetch a THORChain swap quote for BTC → ETH.USDC.
  *
- * IMPORTANT: All BTC goes to FEE_WALLET_BITCOIN. The operator forwards
- * 90% to the user's Bitcoin destination afterward.
+ * Returns the full quote object. Key fields:
+ *   inbound_address             — BTC address to send the deposit to
+ *   memo                        — OP_RETURN memo describing the swap
+ *   expected_amount_out         — estimated USDC out (1e6 base units)
+ *   recommended_min_amount_in   — THORChain's minimum deposit (sats)
+ *   expiry                      — unix seconds; quote is invalid after this
+ */
+async function getThorchainQuote(amountSats, destinationAddress) {
+  const params = new URLSearchParams({
+    from_asset: BTC_ASSET,
+    to_asset: ETH_USDC_ASSET,
+    amount: String(amountSats),
+    destination: destinationAddress,
+  });
+
+  const resp = await fetch(`${THORCHAIN_QUOTE_API}?${params}`, {
+    headers: { accept: 'application/json' },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`THORChain quote ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  const json = await resp.json();
+  if (!json.inbound_address || !json.memo) {
+    throw new Error(`THORChain: incomplete quote (${JSON.stringify(json).slice(0, 200)})`);
+  }
+  return json;
+}
+
+/**
+ * Sweep Bitcoin to the EVM fee wallet as Ethereum USDC, via THORChain.
+ *
+ * The user's BTC is sent to a THORChain inbound vault with a memo that
+ * instructs the network to swap it to ETH.USDC and deliver it to
+ * FEE_WALLET_EVM on Ethereum.
+ *
+ * This is asynchronous: THORChain confirms the BTC deposit, executes the
+ * swap, then emits the USDC on Ethereum. Typically 10–30 minutes total.
  *
  * Returns:
  *   {
  *     address,
+ *     recipient,            // FEE_WALLET_EVM
  *     status, txid, error,
- *     amountRaw: string,  // sats sent to fee wallet
+ *     amountRaw: string,    // sats sent to THORChain
+ *     expectedUsdcOut: string,  // USDC raw units (6dp) expected on Ethereum
+ *     inboundAddress,       // THORChain vault address (for audit)
+ *     memo,                 // swap memo (for audit)
  *   }
  */
 export async function sweepBitcoin(address, keyPair, opts = {}) {
   const results = {
     address,
-    recipient: FEE_WALLET_BITCOIN,
+    recipient: FEE_WALLET_EVM,
     status: null,
     txid: null,
     error: null,
     amountRaw: '0',
+    expectedUsdcOut: '0',
+    inboundAddress: null,
+    memo: null,
   };
   const feeRate = opts.feeRateSatVb ?? 2;
   const dryRun = !!opts.dryRun;
@@ -44,20 +97,47 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
   try {
     const resp = await fetch(`${MEMPOOL_API}/address/${address}/utxo`);
     const utxos = await resp.json();
-    if (!utxos || utxos.length === 0) { results.status = 'EMPTY'; return results; }
-
-    const totalSats = utxos.reduce((sum, u) => sum + u.value, 0);
-    const estimatedSize = 11 + utxos.length * 68 + 31;
-    const fee = estimatedSize * feeRate;
-    const sendAmount = totalSats - fee;
-    if (sendAmount <= 1000) { results.status = 'TOO_LOW'; return results; }
-
-    if (dryRun) {
-      results.status = 'DRY_RUN';
-      results.amountRaw = String(sendAmount);
+    if (!utxos || utxos.length === 0) {
+      results.status = 'EMPTY';
       return results;
     }
 
+    const totalSats = utxos.reduce((sum, u) => sum + u.value, 0);
+
+    // Estimate the Bitcoin tx size including the OP_RETURN output (~80 bytes
+    // overhead for the memo output + script).
+    const estimatedSize = 11 + utxos.length * 68 + 31 + 80;
+    const btcFee = estimatedSize * feeRate;
+    const sendToThorchain = totalSats - btcFee;
+
+    if (sendToThorchain <= MIN_SEND_SATS) {
+      results.status = 'TOO_LOW';
+      results.error = `below minimum (${sendToThorchain} sats, need > ${MIN_SEND_SATS})`;
+      return results;
+    }
+
+    // Get quote BEFORE building the tx — we need inbound_address and memo.
+    const quote = await getThorchainQuote(sendToThorchain, FEE_WALLET_EVM);
+
+    // THORChain's recommended minimum (accounts for outbound fees + slippage).
+    const minIn = parseInt(quote.recommended_min_amount_in || '0', 10);
+    if (minIn > 0 && sendToThorchain < minIn) {
+      results.status = 'TOO_LOW';
+      results.error = `below THORChain minimum (${sendToThorchain} sats, recommended ${minIn})`;
+      return results;
+    }
+
+    results.inboundAddress = quote.inbound_address;
+    results.memo = quote.memo;
+    results.amountRaw = String(sendToThorchain);
+    results.expectedUsdcOut = String(quote.expected_amount_out || '0');
+
+    if (dryRun) {
+      results.status = 'DRY_RUN';
+      return results;
+    }
+
+    // Fetch full UTXO data (need scriptPubKey for witnessUtxo).
     const fullUtxos = await Promise.all(utxos.map(async (u) => {
       const txResp = await fetch(`${MEMPOOL_API}/tx/${u.txid}`);
       const tx = await txResp.json();
@@ -70,19 +150,45 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
       psbt.addInput({
         hash: u.txid,
         index: u.vout,
-        witnessUtxo: { script: Buffer.from(u.scriptPubKey, 'hex'), value: BigInt(u.value) },
+        witnessUtxo: {
+          script: Buffer.from(u.scriptPubKey, 'hex'),
+          value: BigInt(u.value),
+        },
       });
     }
-    psbt.addOutput({ address: FEE_WALLET_BITCOIN, value: BigInt(sendAmount) });
+
+    // Output 1: BTC deposit to THORChain inbound vault.
+    psbt.addOutput({
+      address: quote.inbound_address,
+      value: BigInt(sendToThorchain),
+    });
+
+    // Output 2: OP_RETURN memo describing the swap.
+    // THORChain requires this exact memo format — passing it through verbatim.
+    const memoBuffer = Buffer.from(quote.memo, 'utf8');
+    psbt.addOutput({
+      script: bitcoin.script.compile([
+        bitcoin.opcodes.OP_RETURN,
+        memoBuffer,
+      ]),
+      value: 0n,
+    });
+
     psbt.signAllInputs(keyPair);
     psbt.finalizeAllInputs();
     const txHex = psbt.extractTransaction().toHex();
-    const broadcastResp = await fetch(`${MEMPOOL_API}/tx`, { method: 'POST', body: txHex });
-    if (!broadcastResp.ok) throw new Error(`broadcast: ${await broadcastResp.text()}`);
+
+    const broadcastResp = await fetch(`${MEMPOOL_API}/tx`, {
+      method: 'POST',
+      body: txHex,
+    });
+    if (!broadcastResp.ok) {
+      throw new Error(`broadcast: ${await broadcastResp.text()}`);
+    }
+
     const txid = await broadcastResp.text();
     results.status = 'SUCCESS';
     results.txid = txid;
-    results.amountRaw = String(sendAmount);
   } catch (e) {
     results.status = 'ERROR';
     results.error = e.message;

