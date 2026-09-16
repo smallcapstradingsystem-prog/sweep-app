@@ -206,7 +206,7 @@ export async function connectWalletConnect({
     ],
     events: ['chainChanged', 'accountsChanged'],
     metadata: {
-      name: 'Sweep',
+      name: 'Sweeper',
       description: 'Non-custodial cross-chain wallet sweeper',
       url: window.location.origin,
       icons: [`${window.location.origin}/favicon.ico`],
