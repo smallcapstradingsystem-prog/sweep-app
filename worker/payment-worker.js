@@ -14,12 +14,10 @@
  *   GET  /health             — health check
  *
  * Required secrets:
- *   CRYPTO_ADDRESS_BASE      — 0x... receiving address on Base
- *   CRYPTO_ADDRESS_ETH       — 0x... receiving address on Ethereum
+ *   CRYPTO_ADDRESS_EVM       — 0x... receiving address (all EVM chains)
  *   CRYPTO_ADDRESS_SOL       — base58 receiving address on Solana
  *   CRYPTO_ADDRESS_BTC       — bc1q... receiving address on Bitcoin
- *   BASESCAN_API_KEY
- *   ETHERSCAN_API_KEY
+ *   ETHERSCAN_API_KEY        — unified Etherscan V2 key (all EVM chains)
  *   HELIUS_API_KEY
  *   GAS_SPONSOR_KEY          — EVM gas sponsor wallet private key
  *   OPERATOR_SECRET          — password for /fee/* operator endpoints
@@ -36,8 +34,6 @@ import { ethers } from 'ethers';
 // CONFIG
 // =====================================================================
 
-const PRICE_USD_CENTS = 500;
-
 const BUNDLES = {
   'single':    { credits: 1,  priceCents: 500 },
   'pack-5':    { credits: 5,  priceCents: 2250 },
@@ -46,17 +42,70 @@ const BUNDLES = {
   'pack-50':   { credits: 50, priceCents: 15000 },
 };
 
-const METHODS = {
-  'usdc-base':     { chain: 'base',     token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_BASE' },
-  'eth-base':      { chain: 'base',     token: 'ETH',  decimals: 18, envAddress: 'CRYPTO_ADDRESS_BASE' },
-  'usdc-ethereum': { chain: 'ethereum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_ETH'  },
-  'sol':           { chain: 'solana',   token: 'SOL',  decimals: 9,  envAddress: 'CRYPTO_ADDRESS_SOL'  },
-  'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8,  envAddress: 'CRYPTO_ADDRESS_BTC'  },
+// Unified Etherscan V2 chain IDs.
+const CHAIN_IDS = {
+  ethereum: 1,
+  optimism: 10,
+  bnb:      56,
+  polygon:  137,
+  base:     8453,
+  arbitrum: 42161,
 };
 
-const USDC_ADDRESSES = {
-  base:     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+// Token contract addresses per chain. Native tokens (ETH, SOL, BTC)
+// are not listed here — they're scanned by native-transfer APIs.
+const TOKEN_ADDRESSES = {
+  ethereum: {
+    USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+  },
+  optimism: {
+    USDC: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+    USDT: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
+  },
+  bnb: {
+    USDC: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+    USDT: '0x55d398326f99059fF775485246999027B3197955',
+  },
+  polygon: {
+    USDC: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+    USDT: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+  },
+  base: {
+    USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    USDT: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+  },
+  arbitrum: {
+    USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+  },
+};
+
+// Every method maps to one of the three destination secrets plus
+// (for EVM tokens) a chain + token symbol used by the scanner.
+const METHODS = {
+  // ---- USDC ----
+  'usdc-base':     { chain: 'base',     token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdc-arbitrum': { chain: 'arbitrum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdc-optimism': { chain: 'optimism', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdc-polygon':  { chain: 'polygon',  token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdc-bnb':      { chain: 'bnb',      token: 'USDC', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdc-ethereum': { chain: 'ethereum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+
+  // ---- USDT ----
+  'usdt-base':     { chain: 'base',     token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdt-arbitrum': { chain: 'arbitrum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdt-optimism': { chain: 'optimism', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdt-polygon':  { chain: 'polygon',  token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdt-bnb':      { chain: 'bnb',      token: 'USDT', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
+  'usdt-ethereum': { chain: 'ethereum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
+
+  // ---- Native ETH (Base only, cheapest) ----
+  'eth-base':      { chain: 'base',     token: 'ETH',  decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
+
+  // ---- Non-EVM ----
+  'sol':           { chain: 'solana',   token: 'SOL',  decimals: 9,  envAddress: 'CRYPTO_ADDRESS_SOL' },
+  'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8,  envAddress: 'CRYPTO_ADDRESS_BTC' },
 };
 
 const SPONSOR_RPC = {
@@ -192,7 +241,9 @@ async function handleCryptoQuote(request, env, cors) {
 }
 
 async function getCryptoRate(methodConfig) {
-  if (methodConfig.token === 'USDC') return { price: 1.0, decimals: methodConfig.decimals };
+  if (methodConfig.token === 'USDC' || methodConfig.token === 'USDT') {
+    return { price: 1.0, decimals: methodConfig.decimals };
+  }
 
   const coinIds = { ETH: 'ethereum', SOL: 'solana', BTC: 'bitcoin' };
   const id = coinIds[methodConfig.token];
@@ -242,37 +293,58 @@ async function handleCryptoVerify(request, env, cors) {
 
 async function scanForPayment(env, pending) {
   const { chain, token, address, expectedRaw } = pending;
-  if (chain === 'base' || chain === 'ethereum') return await scanEvmChain(env, chain, token, address, expectedRaw);
   if (chain === 'solana') return await scanSolana(env, address, expectedRaw);
   if (chain === 'bitcoin') return await scanBitcoin(env, address, expectedRaw);
-  return null;
+  // Everything else is EVM
+  return await scanEvmChain(env, chain, token, address, expectedRaw);
 }
 
+/**
+ * Unified EVM scanner using Etherscan V2.
+ * One API key, one endpoint, chainid parameter selects the network.
+ */
 async function scanEvmChain(env, chain, token, address, expectedRaw) {
-  const apiKey = chain === 'base' ? env.BASESCAN_API_KEY : env.ETHERSCAN_API_KEY;
-  const baseUrl = chain === 'base' ? 'https://api.basescan.org/api' : 'https://api.etherscan.io/api';
+  const apiKey = env.ETHERSCAN_API_KEY;
+  if (!apiKey) return null;
 
-  if (token === 'USDC') {
-    const url = `${baseUrl}?module=account&action=tokentx&contractaddress=${USDC_ADDRESSES[chain]}&address=${address}&sort=desc&apikey=${apiKey}`;
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return null;
+
+  const baseUrl = `https://api.etherscan.io/v2/api?chainid=${chainId}`;
+
+  // ERC-20 tokens (USDC, USDT)
+  if (token === 'USDC' || token === 'USDT') {
+    const contract = TOKEN_ADDRESSES[chain]?.[token];
+    if (!contract) return null;
+
+    const url = `${baseUrl}&module=account&action=tokentx&contractaddress=${contract}&address=${address}&sort=desc&apikey=${apiKey}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if (!data.result || !Array.isArray(data.result)) return null;
+
     for (const tx of data.result.slice(0, 20)) {
       if (tx.to?.toLowerCase() === address.toLowerCase() && tx.value === expectedRaw) {
         return { txHash: tx.hash, blockNumber: tx.blockNumber };
       }
     }
-  } else if (token === 'ETH') {
-    const url = `${baseUrl}?module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    if (!data.result || !Array.isArray(data.result)) return null;
-    for (const tx of data.result.slice(0, 20)) {
-      if (tx.to?.toLowerCase() === address.toLowerCase() && tx.value === expectedRaw) {
-        return { txHash: tx.hash, blockNumber: tx.blockNumber };
-      }
-    }
+    return null;
   }
+
+  // Native token (ETH on Base)
+  if (token === 'ETH') {
+    const url = `${baseUrl}&module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (!data.result || !Array.isArray(data.result)) return null;
+
+    for (const tx of data.result.slice(0, 20)) {
+      if (tx.to?.toLowerCase() === address.toLowerCase() && tx.value === expectedRaw) {
+        return { txHash: tx.hash, blockNumber: tx.blockNumber };
+      }
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -491,10 +563,8 @@ async function handleFeeRecord(request, env, cors) {
 
 function buildOperatorView(receipts, gasSponsorships) {
   const lines = [];
-  lines.push('MANUAL FORWARD REQUIRED');
+  lines.push('SWEEP RECEIPT');
   lines.push('═'.repeat(60));
-  lines.push('Swept value has landed in the fee wallets. Send 90% (minus');
-  lines.push('any sponsorship fees) to the user and keep the rest.');
   lines.push('');
 
   const sponsorFeeForChain = (chain) => {
@@ -508,19 +578,15 @@ function buildOperatorView(receipts, gasSponsorships) {
   for (const r of receipts) {
     const chainLabel = r.family === 'evm' ? `EVM ${r.chain}` : r.family;
     const received = BigInt(r.amountRaw);
-    const userAmount = BigInt(r.userShareRaw || '0');
     const sponsorFee = r.family === 'evm' ? sponsorFeeForChain(r.chain) : 0n;
-    const netUserAmount = userAmount > sponsorFee ? userAmount - sponsorFee : 0n;
 
     lines.push(`[${chainLabel}]`);
     lines.push(`  Fee wallet:        ${r.recipient}`);
     lines.push(`  ${r.symbol} received:  ${formatAmount(received, r.decimals)}`);
-    lines.push(`  90% share:         ${formatAmount(userAmount, r.decimals)} ${r.symbol}`);
     if (sponsorFee > 0n) {
       lines.push(`  Sponsorship fee:  -${formatAmount(sponsorFee, r.decimals)} ${r.symbol}`);
     }
-    lines.push(`  Send to user:      ${formatAmount(netUserAmount, r.decimals)} ${r.symbol} on ${chainLabel} → ${r.userDestination}`);
-    lines.push(`  Keep as fee:       ${formatAmount(received - netUserAmount, r.decimals)} ${r.symbol}`);
+    lines.push(`  User destination:  ${r.userDestination}`);
     lines.push('');
   }
 

@@ -1,5 +1,5 @@
 /**
- * crypto-pay.js — Crypto payment modal with bundle picker.
+ * crypto-pay.js — Crypto payment modal with token → chain picker.
  */
 
 import QRCode from 'qrcode';
@@ -14,12 +14,48 @@ const BUNDLES = [
   { id: 'pack-50', label: '50 credits',price: '$150', hint: '$3.00 per sweep' },
 ];
 
-const METHODS = [
-  { id: 'usdc-base',     label: 'USDC on Base',     icon: '🔵', hint: 'Cheapest — ~$0.01 gas' },
-  { id: 'usdc-ethereum', label: 'USDC on Ethereum', icon: '⚪', hint: '~$5-20 gas' },
-  { id: 'eth-base',      label: 'ETH on Base',      icon: '🔷', hint: '~$0.01 gas' },
-  { id: 'sol',           label: 'SOL on Solana',    icon: '🟣', hint: '~$0.001 gas' },
-  { id: 'btc',           label: 'Bitcoin',          icon: '🟠', hint: 'Varies with mempool' },
+// Tokens first, then chains within each token.
+const TOKENS = [
+  {
+    id: 'usdc', label: 'USDC', icon: '🔵', hint: 'USD Coin — stablecoin',
+    chains: [
+      { id: 'usdc-base',     label: 'Base',     hint: 'Cheapest — ~$0.01 gas' },
+      { id: 'usdc-arbitrum', label: 'Arbitrum', hint: '~$0.02 gas' },
+      { id: 'usdc-optimism', label: 'Optimism', hint: '~$0.02 gas' },
+      { id: 'usdc-polygon',  label: 'Polygon',  hint: '~$0.01 gas' },
+      { id: 'usdc-bnb',      label: 'BNB Chain',hint: '~$0.05 gas' },
+      { id: 'usdc-ethereum', label: 'Ethereum', hint: '~$5-20 gas' },
+    ],
+  },
+  {
+    id: 'usdt', label: 'USDT', icon: '🟢', hint: 'Tether — stablecoin',
+    chains: [
+      { id: 'usdt-base',     label: 'Base',     hint: 'Cheapest — ~$0.01 gas' },
+      { id: 'usdt-arbitrum', label: 'Arbitrum', hint: '~$0.02 gas' },
+      { id: 'usdt-optimism', label: 'Optimism', hint: '~$0.02 gas' },
+      { id: 'usdt-polygon',  label: 'Polygon',  hint: '~$0.01 gas' },
+      { id: 'usdt-bnb',      label: 'BNB Chain',hint: '~$0.05 gas' },
+      { id: 'usdt-ethereum', label: 'Ethereum', hint: '~$5-20 gas' },
+    ],
+  },
+  {
+    id: 'eth', label: 'ETH', icon: '🔷', hint: 'Native ETH on Base',
+    chains: [
+      { id: 'eth-base', label: 'Base', hint: '~$0.01 gas' },
+    ],
+  },
+  {
+    id: 'sol', label: 'SOL', icon: '🟣', hint: 'Native Solana',
+    chains: [
+      { id: 'sol', label: 'Solana', hint: '~$0.001 gas' },
+    ],
+  },
+  {
+    id: 'btc', label: 'BTC', icon: '🟠', hint: 'Native Bitcoin',
+    chains: [
+      { id: 'btc', label: 'Bitcoin', hint: 'Varies with mempool' },
+    ],
+  },
 ];
 
 let pollCancelled = false;
@@ -32,8 +68,6 @@ export function showCryptoPaymentModal(defaultBundle = 'single') {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    // Everything below closes over `overlay` directly. No DOM lookups,
-    // no event-target walking, no fragility.
     const ctx = {
       overlay,
       modal,
@@ -53,56 +87,44 @@ export function showCryptoPaymentModal(defaultBundle = 'single') {
 // =====================================================================
 // RENDERERS
 // =====================================================================
-//
-// Each renderer replaces the modal's contents wholesale. They all take
-// the same `ctx` object so they can move forward (bundle → method →
-// payment) or backward (method → bundle) without querying the DOM.
-// =====================================================================
 
-function renderBundlePicker(ctx) {
-  ctx.modal.innerHTML = '';
-
-  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
+function modalHeader(ctx) {
+  return el('div', { class: 'modal-header' }, [
     el('h2', { text: 'Buy sweep credits' }),
     el('button', {
       class: 'modal-close',
       text: '×',
       onclick: ctx.cancel,
     }),
-  ]));
+  ]);
+}
+
+function renderBundlePicker(ctx) {
+  ctx.modal.innerHTML = '';
+  ctx.modal.appendChild(modalHeader(ctx));
 
   const body = el('div', { class: 'modal-body' });
-
   body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
 
   const list = el('div', { class: 'bundle-list' });
   for (const b of BUNDLES) {
-    const card = el('button', {
+    list.appendChild(el('button', {
       class: 'bundle-card' + (b.badge ? ' featured' : ''),
-      onclick: () => renderMethodPicker(ctx, b),
+      onclick: () => renderTokenPicker(ctx, b),
     }, [
       b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
       el('div', { class: 'bundle-label', text: b.label }),
       el('div', { class: 'bundle-price', text: b.price }),
       el('div', { class: 'bundle-hint', text: b.hint }),
-    ].filter(Boolean));
-    list.appendChild(card);
+    ].filter(Boolean)));
   }
   body.appendChild(list);
   ctx.modal.appendChild(body);
 }
 
-function renderMethodPicker(ctx, bundle) {
+function renderTokenPicker(ctx, bundle) {
   ctx.modal.innerHTML = '';
-
-  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
-    el('h2', { text: 'Buy sweep credits' }),
-    el('button', {
-      class: 'modal-close',
-      text: '×',
-      onclick: ctx.cancel,
-    }),
-  ]));
+  ctx.modal.appendChild(modalHeader(ctx));
 
   const body = el('div', { class: 'modal-body' });
 
@@ -112,18 +134,25 @@ function renderMethodPicker(ctx, bundle) {
     onclick: () => renderBundlePicker(ctx),
   }));
 
-  body.appendChild(el('h3', { text: `Pay ${bundle.price} — choose a method` }));
+  body.appendChild(el('h3', { text: `Pay ${bundle.price} — choose a token` }));
 
   const list = el('div', { class: 'crypto-methods' });
-  for (const m of METHODS) {
+  for (const t of TOKENS) {
     list.appendChild(el('button', {
       class: 'crypto-method',
-      onclick: () => renderPayment(ctx, bundle, m),
+      onclick: () => {
+        if (t.chains.length === 1) {
+          // Only one chain — skip the picker and go straight to payment
+          renderPayment(ctx, bundle, t.chains[0], t);
+        } else {
+          renderChainPicker(ctx, bundle, t);
+        }
+      },
     }, [
-      el('span', { class: 'crypto-method-icon', text: m.icon }),
+      el('span', { class: 'crypto-method-icon', text: t.icon }),
       el('div', {}, [
-        el('div', { class: 'crypto-method-label', text: m.label }),
-        el('div', { class: 'crypto-method-hint', text: m.hint }),
+        el('div', { class: 'crypto-method-label', text: t.label }),
+        el('div', { class: 'crypto-method-hint', text: t.hint }),
       ]),
       el('span', { class: 'crypto-method-arrow', text: '→' }),
     ]));
@@ -132,24 +161,54 @@ function renderMethodPicker(ctx, bundle) {
   ctx.modal.appendChild(body);
 }
 
-async function renderPayment(ctx, bundle, method) {
+function renderChainPicker(ctx, bundle, token) {
   ctx.modal.innerHTML = '';
-
-  ctx.modal.appendChild(el('div', { class: 'modal-header' }, [
-    el('h2', { text: 'Buy sweep credits' }),
-    el('button', {
-      class: 'modal-close',
-      text: '×',
-      onclick: ctx.cancel,
-    }),
-  ]));
+  ctx.modal.appendChild(modalHeader(ctx));
 
   const body = el('div', { class: 'modal-body' });
 
   body.appendChild(el('button', {
     class: 'link-back',
-    text: '← Back to methods',
-    onclick: () => renderMethodPicker(ctx, bundle),
+    text: '← Back to tokens',
+    onclick: () => renderTokenPicker(ctx, bundle),
+  }));
+
+  body.appendChild(el('h3', { text: `Pay ${bundle.price} in ${token.label} — choose a chain` }));
+
+  const list = el('div', { class: 'crypto-methods' });
+  for (const c of token.chains) {
+    list.appendChild(el('button', {
+      class: 'crypto-method',
+      onclick: () => renderPayment(ctx, bundle, c, token),
+    }, [
+      el('span', { class: 'crypto-method-icon', text: token.icon }),
+      el('div', {}, [
+        el('div', { class: 'crypto-method-label', text: `${token.label} on ${c.label}` }),
+        el('div', { class: 'crypto-method-hint', text: c.hint }),
+      ]),
+      el('span', { class: 'crypto-method-arrow', text: '→' }),
+    ]));
+  }
+  body.appendChild(list);
+  ctx.modal.appendChild(body);
+}
+
+async function renderPayment(ctx, bundle, chain, token) {
+  ctx.modal.innerHTML = '';
+  ctx.modal.appendChild(modalHeader(ctx));
+
+  const body = el('div', { class: 'modal-body' });
+
+  // Back button: goes to chain picker if the token has multiple chains,
+  // otherwise back to the token picker.
+  const backTarget = token.chains.length > 1
+    ? () => renderChainPicker(ctx, bundle, token)
+    : () => renderTokenPicker(ctx, bundle);
+
+  body.appendChild(el('button', {
+    class: 'link-back',
+    text: token.chains.length > 1 ? `← Back to ${token.label} chains` : '← Back to tokens',
+    onclick: backTarget,
   }));
 
   body.appendChild(el('p', { class: 'hint', text: 'Fetching quote...' }));
@@ -157,14 +216,14 @@ async function renderPayment(ctx, bundle, method) {
 
   let quote;
   try {
-    quote = await requestCryptoQuote(bundle.id, method.id);
+    quote = await requestCryptoQuote(bundle.id, chain.id);
   } catch (err) {
     body.innerHTML = '';
     body.appendChild(el('p', { class: 'error', text: `Failed: ${err.message}` }));
     body.appendChild(el('button', {
       class: 'btn btn-secondary',
-      text: 'Try another method',
-      onclick: () => renderMethodPicker(ctx, bundle),
+      text: 'Try another',
+      onclick: backTarget,
     }));
     return;
   }
@@ -183,10 +242,9 @@ async function renderPayment(ctx, bundle, method) {
   const qrContainer = el('div', { class: 'crypto-qr' });
   body.appendChild(qrContainer);
 
-  // QR payload is the raw address (not a payment URI). The unique
-  // fractional amount must be entered exactly; a QR that pre-fills
-  // it would risk truncation by the paying wallet, which would break
-  // the worker's exact-match payment detection.
+  // QR payload is the raw address. The unique fractional amount must
+  // be entered exactly; pre-filling it in a QR would risk truncation
+  // by the paying wallet, breaking exact-match detection.
   QRCode.toCanvas(quote.address, { width: 220, margin: 2 })
     .then((canvas) => {
       canvas.style.background = '#fff';
