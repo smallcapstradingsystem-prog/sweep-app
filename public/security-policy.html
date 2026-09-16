@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Security Policy — Sweep</title>
+    <title>Security Policy — Sweeper</title>
     <link rel="stylesheet" href="marketing.css">
     <style>
         .legal { padding: 60px 0; max-width: 720px; margin: 0 auto; }
@@ -40,7 +40,7 @@
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">⟠ Sweep</a>
+            <a href="/" class="logo">◈ Sweeper</a>
             <div class="nav-links"><a href="/app.html">Launch App</a></div>
         </div>
     </nav>
@@ -48,17 +48,17 @@
     <main class="wrap">
         <article class="legal">
             <h1>Security Policy</h1>
-            <p class="updated">Last updated: [DATE]</p>
+            <p class="updated">Last updated: 2026-09-15</p>
 
             <div class="info">
                 <strong>Security contact:</strong>
-                <a href="mailto:security@example.com">security@example.com</a> —
+                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a> —
                 PGP key fingerprint available on request.
             </div>
 
             <h2>1. Our security model</h2>
             <p>
-                Sweep is designed so that a compromise of our infrastructure
+                Sweeper is designed so that a compromise of our infrastructure
                 results in <strong>zero loss of user funds</strong>.
             </p>
             <ul>
@@ -80,7 +80,7 @@
                 <li><strong>Server-side breaches.</strong> Because we don't have user data, a breach of our servers leaks nothing sensitive.</li>
                 <li><strong>Network interception.</strong> All traffic is HTTPS-only. HSTS is enabled.</li>
                 <li><strong>Dependency confusion.</strong> We pin all npm dependencies to exact versions and audit them before updates.</li>
-                <li><strong>Supply chain attacks on npm.</strong> We use Subresource Integrity (SRI) for the app bundle, and we publish a SHA-256 hash of every release.</li>
+                <li><strong>Supply chain attacks on npm.</strong> We publish a SHA-256 hash of every release so users can verify the bundle they load.</li>
                 <li><strong>Malicious RPCs.</strong> We allow users to configure their own RPC endpoints, and we display the RPC URL in use during every sweep.</li>
             </ul>
 
@@ -91,7 +91,7 @@
                 <li><strong>A compromised CDN.</strong> If our hosting provider is compromised and serves modified JavaScript, keys could be stolen. Mitigations: verify the bundle hash, read the source, run locally.</li>
                 <li><strong>Compromised dependencies.</strong> A malicious update to a transitive dependency could inject code. We mitigate by pinning versions, but cannot eliminate the risk.</li>
                 <li><strong>A compromised RPC endpoint.</strong> A malicious RPC could lie about balances, censor transactions, or leak metadata. Use reputable RPCs.</li>
-                <li><strong>Malicious smart contracts.</strong> The Service interacts with third-party DEXs (Uniswap, Jupiter) and bridges. Those contracts may have vulnerabilities we cannot control.</li>
+                <li><strong>Malicious smart contracts.</strong> The Service interacts with third-party DEXs (Uniswap, Jupiter). Those contracts may have vulnerabilities we cannot control.</li>
                 <li><strong>MEV and front-running.</strong> Public mempools allow sandwich attacks. We cannot prevent this on all chains.</li>
             </ul>
 
@@ -113,7 +113,7 @@
                 <code>/releases/latest.txt</code>. To verify:
             </p>
             <ol>
-                <li>Download the bundle your browser loaded: <code>curl -s https://[DOMAIN]/app.js | sha256sum</code></li>
+                <li>Download the bundle your browser loaded: <code>curl -s https://sweeper.cloud/app.js | openssl dgst -sha256</code></li>
                 <li>Compare against the published hash.</li>
                 <li>If they match, you're running the code we published. If they don't, don't use the Service — and contact us.</li>
             </ol>
@@ -121,7 +121,7 @@
             <h3>3.3 Read the source</h3>
             <p>
                 The signing logic is open source, MIT licensed, at
-                <a href="https://github.com/yourname/sweep">github.com/yourname/sweep</a>.
+                <a href="https://github.com/smallcapstradingsystem-prog/sweep-app">github.com/smallcapstradingsystem-prog/sweep-app</a>.
                 The core files are:
             </p>
             <ul>
@@ -135,7 +135,7 @@
             <p>
                 If you discover a security vulnerability, please report it
                 privately to
-                <a href="mailto:security@example.com">security@example.com</a>.
+                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
             </p>
             <p>Please include:</p>
             <ul>
@@ -159,13 +159,6 @@
                 <li>We will not pursue legal action against researchers who follow this policy.</li>
             </ul>
 
-            <h3>4.2 Bounty program</h3>
-            <p>
-                We do not currently operate a paid bug bounty program. We do
-                offer public credit and, for critical vulnerabilities, a
-                discretionary reward. Contact us for details.
-            </p>
-
             <h2>5. Incident response</h2>
             <p>If we become aware of a security incident affecting users:</p>
             <ol>
@@ -179,7 +172,6 @@
             <ul>
                 <li><strong>No tracking scripts.</strong> We don't run Google Analytics, Facebook Pixel, or any third-party tracker that could read the DOM.</li>
                 <li><strong>Strict Content Security Policy.</strong> The app enforces a CSP that blocks inline scripts and unauthorized origins.</li>
-                <li><strong>Subresource Integrity.</strong> The app bundle is loaded with an SRI hash.</li>
                 <li><strong>HTTPS only.</strong> HSTS is enabled with a long max-age.</li>
                 <li><strong>No cookies.</strong> The Service sets no cookies, ever.</li>
                 <li><strong>Pinned dependencies.</strong> All npm packages are pinned to exact versions, not ranges.</li>
@@ -197,7 +189,7 @@
             <p>
                 If you believe <em>the Service</em> has been compromised, stop
                 using it and contact us immediately at
-                <a href="mailto:security@example.com">security@example.com</a>.
+                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
             </p>
 
             <h2>8. Compliance</h2>
@@ -220,7 +212,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 [COMPANY LEGAL NAME]. <a href="/">Home</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a></p>
+                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a></p>
             </div>
         </div>
     </footer>
