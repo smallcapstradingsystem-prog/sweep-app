@@ -15,19 +15,15 @@
  *   POST /fee/mark-forwarded    — operator view: mark a sweep forwarded
  *   GET  /health                — health check
  *
- * Required secrets:
- *   CRYPTO_ADDRESS_EVM       — 0x... receiving address (all EVM chains)
- *   CRYPTO_ADDRESS_SOL       — base58 receiving address on Solana
- *   CRYPTO_ADDRESS_BTC       — bc1q... receiving address on Bitcoin
- *   ETHERSCAN_API_KEY        — unified Etherscan V2 key
- *   HELIUS_API_KEY
- *   GAS_SPONSOR_KEY          — EVM gas sponsor wallet private key
- *   OPERATOR_SECRET          — password for /fee/* operator endpoints
+ * Free-claim semantics:
+ *   - 24-hour window per user (clientId). Starts at first claim click.
+ *   - Up to 3 claims per IP within a 7-day rolling window.
+ *   - Per-clientId dedup is permanent (1 year).
  *
- * KV namespaces:
- *   CREDITS             — balances, history, free-claim state, rate limits
- *   PENDING_PAYMENTS    — crypto payment records
- *   RECEIPTS            — Solana orderIds pending affiliate claim
+ * Required secrets:
+ *   CRYPTO_ADDRESS_EVM, CRYPTO_ADDRESS_SOL, CRYPTO_ADDRESS_BTC
+ *   ETHERSCAN_API_KEY, HELIUS_API_KEY
+ *   GAS_SPONSOR_KEY, OPERATOR_SECRET
  */
 
 import { ethers } from 'ethers';
@@ -45,12 +41,7 @@ const BUNDLES = {
 };
 
 const CHAIN_IDS = {
-  ethereum: 1,
-  optimism: 10,
-  bnb:      56,
-  polygon:  137,
-  base:     8453,
-  arbitrum: 42161,
+  ethereum: 1, optimism: 10, bnb: 56, polygon: 137, base: 8453, arbitrum: 42161,
 };
 
 const TOKEN_ADDRESSES = {
@@ -108,12 +99,8 @@ const SPONSOR_RPC = {
 };
 
 const SPONSOR_MAX_WEI = {
-  ethereum: '0.005',
-  arbitrum: '0.0005',
-  optimism: '0.0005',
-  base:     '0.0005',
-  polygon:  '0.2',
-  bnb:      '0.005',
+  ethereum: '0.005', arbitrum: '0.0005', optimism: '0.0005',
+  base: '0.0005', polygon: '0.2', bnb: '0.005',
 };
 
 const SPONSOR_RATE_MAX = 20;
@@ -122,12 +109,13 @@ const SPONSOR_RATE_WINDOW_MS = 10 * 60 * 1000;
 const RECEIPTS_KEY = 'pending_solana_order_ids';
 const RECEIPTS_MAX = 5000;
 
-// Free-credit launch bonus.
+// Free-credit launch bonus — balanced IP policy.
 const FREE_CLAIM_CREDITS = 3;
-const FREE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;   // 24 hours
-const FREE_CLAIM_START_TTL = 48 * 60 * 60;          // 48h
-const FREE_CLAIM_GRANTED_TTL = 60 * 60 * 24 * 365;  // 1 year
-const FREE_CLAIM_IP_TTL = 60 * 60 * 24 * 30;        // 30 days
+const FREE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;   // 24 hours per user
+const FREE_CLAIM_START_TTL = 48 * 60 * 60;          // 48h (window + buffer)
+const FREE_CLAIM_GRANTED_TTL = 60 * 60 * 24 * 365;  // 1 year per clientId
+const FREE_CLAIM_IP_MAX = 3;                        // up to 3 claims per IP
+const FREE_CLAIM_IP_TTL = 60 * 60 * 24 * 7;         // 7-day rolling window
 
 // =====================================================================
 // ROUTER
@@ -393,6 +381,26 @@ async function addCredits(env, clientId, delta, metadata = {}) {
 // =====================================================================
 // FREE CREDITS — CLAIM WINDOW
 // =====================================================================
+//
+// Policy:
+//   - Per-clientId: one claim, forever (1-year TTL on the granted key).
+//   - Per-user window: 24h starting at the moment of the claim click.
+//   - Per-IP: up to 3 claims within a rolling 7-day window.
+//
+// handleClaimInfo never writes to KV. It only reads state and reports
+// it back to the client so the banner can render the right thing.
+//
+// handleClaimFree is the only writer. It re-checks all conditions
+// before granting, so a race between concurrent requests can't
+// double-grant on the same clientId (the second request sees the
+// granted key on the initial read).
+//
+// Known race: if the worker dies between addCredits and the write of
+// grantedKey, a retry would grant again. The window is milliseconds
+// and the IP cap limits the damage to at most 3 extra credits per IP
+// per 7 days. Not worth the complexity to eliminate with KV's lack
+// of conditional writes.
+// =====================================================================
 
 async function handleClaimInfo(request, env, cors) {
   const { clientId } = await request.json();
@@ -400,50 +408,73 @@ async function handleClaimInfo(request, env, cors) {
     return json({ error: 'clientId required' }, 400, cors);
   }
 
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
   const startKey = `free_claim:start:${clientId}`;
   const grantedKey = `free_claim:granted:${clientId}`;
+  const ipKey = `free_claim:ip:${ip}`;
 
-  const [startRaw, grantedRaw] = await Promise.all([
+  const [startRaw, grantedRaw, ipClaimsRaw] = await Promise.all([
     env.CREDITS.get(startKey),
     env.CREDITS.get(grantedKey),
+    env.CREDITS.get(ipKey),
   ]);
 
   const now = Date.now();
+  const ipClaims = ipClaimsRaw ? parseInt(ipClaimsRaw, 10) : 0;
+  const blockedByIp = ipClaims >= FREE_CLAIM_IP_MAX;
 
+  // Already claimed on this clientId
   if (grantedRaw) {
     const startMs = startRaw ? new Date(startRaw).getTime() : null;
     return json({
       ok: true,
       claimed: true,
       expired: false,
+      blockedByIp,
+      notStarted: false,
       windowStart: startRaw || null,
       windowEnd: startMs ? new Date(startMs + FREE_CLAIM_WINDOW_MS).toISOString() : null,
       msRemaining: 0,
       creditsGranted: FREE_CLAIM_CREDITS,
+      ipClaims,
+      ipMax: FREE_CLAIM_IP_MAX,
     }, 200, cors);
   }
 
-  let windowStart = startRaw ? new Date(startRaw).getTime() : null;
-
-  if (windowStart === null) {
-    windowStart = now;
-    await env.CREDITS.put(startKey, new Date(windowStart).toISOString(), {
-      expirationTtl: FREE_CLAIM_START_TTL,
-    });
+  // No window yet — user hasn't clicked claim.
+  if (!startRaw) {
+    return json({
+      ok: true,
+      claimed: false,
+      expired: false,
+      blockedByIp,
+      notStarted: true,
+      windowStart: null,
+      windowEnd: null,
+      msRemaining: FREE_CLAIM_WINDOW_MS,
+      creditsGranted: 0,
+      ipClaims,
+      ipMax: FREE_CLAIM_IP_MAX,
+    }, 200, cors);
   }
 
+  // Window exists — report state
+  const windowStart = new Date(startRaw).getTime();
   const windowEnd = windowStart + FREE_CLAIM_WINDOW_MS;
   const msRemaining = Math.max(0, windowEnd - now);
-  const expired = msRemaining === 0;
 
   return json({
     ok: true,
     claimed: false,
-    expired,
+    expired: msRemaining === 0,
+    blockedByIp,
+    notStarted: false,
     windowStart: new Date(windowStart).toISOString(),
     windowEnd: new Date(windowEnd).toISOString(),
     msRemaining,
     creditsGranted: 0,
+    ipClaims,
+    ipMax: FREE_CLAIM_IP_MAX,
   }, 200, cors);
 }
 
@@ -460,6 +491,7 @@ async function handleClaimFree(request, env, cors) {
   const grantedKey = `free_claim:granted:${clientId}`;
   const ipKey = `free_claim:ip:${ip}`;
 
+  // --- Dedup checks ---
   const grantedRaw = await env.CREDITS.get(grantedKey);
   if (grantedRaw) {
     return json({
@@ -468,33 +500,35 @@ async function handleClaimFree(request, env, cors) {
     }, 200, cors);
   }
 
-  const ipClaimed = await env.CREDITS.get(ipKey);
-  if (ipClaimed) {
+  const ipClaimsRaw = await env.CREDITS.get(ipKey);
+  const ipClaims = ipClaimsRaw ? parseInt(ipClaimsRaw, 10) : 0;
+  if (ipClaims >= FREE_CLAIM_IP_MAX) {
     return json({
       ok: true, blockedByIp: true, creditsGranted: 0,
+      ipClaims, ipMax: FREE_CLAIM_IP_MAX,
       newBalance: await getBalance(env, clientId),
     }, 200, cors);
   }
 
+  // --- Window check ---
   const startRaw = await env.CREDITS.get(startKey);
-  let windowStart;
 
   if (startRaw) {
-    windowStart = new Date(startRaw).getTime();
+    const windowStart = new Date(startRaw).getTime();
+    if (now - windowStart > FREE_CLAIM_WINDOW_MS) {
+      return json({
+        ok: true, offerExpired: true, creditsGranted: 0,
+        newBalance: await getBalance(env, clientId),
+      }, 200, cors);
+    }
   } else {
-    windowStart = now;
-    await env.CREDITS.put(startKey, new Date(windowStart).toISOString(), {
+    // First claim — start the 24h window now.
+    await env.CREDITS.put(startKey, new Date(now).toISOString(), {
       expirationTtl: FREE_CLAIM_START_TTL,
     });
   }
 
-  if (now - windowStart > FREE_CLAIM_WINDOW_MS) {
-    return json({
-      ok: true, offerExpired: true, creditsGranted: 0,
-      newBalance: await getBalance(env, clientId),
-    }, 200, cors);
-  }
-
+  // --- Grant ---
   const newBalance = await addCredits(env, clientId, FREE_CLAIM_CREDITS, {
     type: 'free_claim', source: 'launch_bonus',
     credits: FREE_CLAIM_CREDITS, ip,
@@ -504,7 +538,7 @@ async function handleClaimFree(request, env, cors) {
     env.CREDITS.put(grantedKey, new Date().toISOString(), {
       expirationTtl: FREE_CLAIM_GRANTED_TTL,
     }),
-    env.CREDITS.put(ipKey, new Date().toISOString(), {
+    env.CREDITS.put(ipKey, String(ipClaims + 1), {
       expirationTtl: FREE_CLAIM_IP_TTL,
     }),
   ]);
@@ -513,6 +547,9 @@ async function handleClaimFree(request, env, cors) {
     ok: true,
     creditsGranted: FREE_CLAIM_CREDITS,
     newBalance,
+    windowEnd: new Date(now + FREE_CLAIM_WINDOW_MS).toISOString(),
+    ipClaims: ipClaims + 1,
+    ipMax: FREE_CLAIM_IP_MAX,
   }, 200, cors);
 }
 

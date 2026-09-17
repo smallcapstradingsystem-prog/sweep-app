@@ -156,6 +156,7 @@ function renderFreeClaimBanner(info) {
     freeClaimTimer = null;
   }
 
+  // 1. Already claimed on this clientId
   if (info.claimed) {
     banner.style.display = '';
     banner.innerHTML = `
@@ -170,6 +171,24 @@ function renderFreeClaimBanner(info) {
     return;
   }
 
+  // 2. Blocked at the IP level — 3 claims already used on this network
+  if (info.blockedByIp) {
+    const used = info.ipClaims ?? '?';
+    const max = info.ipMax ?? '?';
+    banner.style.display = '';
+    banner.innerHTML = `
+      <div class="free-claim-inner">
+        <span class="free-claim-icon">✓</span>
+        <div class="free-claim-text">
+          <strong>Free credits claimed</strong>
+          <p>This launch bonus is limited to ${max} claims per network (${used} used).</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // 3. Window expired without a claim
   if (info.expired) {
     banner.style.display = '';
     banner.innerHTML = `
@@ -184,35 +203,42 @@ function renderFreeClaimBanner(info) {
     return;
   }
 
+  // 4. Active — either a window is running or the user hasn't clicked yet
+  const isRunning = !info.notStarted;
   banner.style.display = '';
   banner.innerHTML = `
     <div class="free-claim-inner">
       <span class="free-claim-icon">🎁</span>
       <div class="free-claim-text">
         <strong>3 free sweep credits</strong>
-        <p>Claim within <span id="free-claim-countdown">--:--:--</span></p>
+        <p>${isRunning
+          ? `Claim within <span id="free-claim-countdown">--:--:--</span>`
+          : `Claim now to start your 24-hour window`}</p>
       </div>
       <button id="free-claim-button" class="btn btn-primary btn-sm">Claim now</button>
     </div>
   `;
 
   const countdownEl = document.getElementById('free-claim-countdown');
-  const renderedAt = Date.now();
-  const updateCountdown = () => {
-    const remaining = info.msRemaining - (Date.now() - renderedAt);
-    if (remaining <= 0) {
-      if (freeClaimTimer) { clearInterval(freeClaimTimer); freeClaimTimer = null; }
-      fetchClaimInfo().then(renderFreeClaimBanner).catch(() => {});
-      return;
-    }
-    const totalSec = Math.floor(remaining / 1000);
-    const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
-    const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
-    const s = String(totalSec % 60).padStart(2, '0');
-    if (countdownEl) countdownEl.textContent = `${h}:${m}:${s}`;
-  };
-  updateCountdown();
-  freeClaimTimer = setInterval(updateCountdown, 1000);
+
+  if (isRunning && countdownEl) {
+    const renderedAt = Date.now();
+    const updateCountdown = () => {
+      const remaining = info.msRemaining - (Date.now() - renderedAt);
+      if (remaining <= 0) {
+        if (freeClaimTimer) { clearInterval(freeClaimTimer); freeClaimTimer = null; }
+        fetchClaimInfo().then(renderFreeClaimBanner).catch(() => {});
+        return;
+      }
+      const totalSec = Math.floor(remaining / 1000);
+      const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+      const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+      const s = String(totalSec % 60).padStart(2, '0');
+      countdownEl.textContent = `${h}:${m}:${s}`;
+    };
+    updateCountdown();
+    freeClaimTimer = setInterval(updateCountdown, 1000);
+  }
 
   const claimBtn = document.getElementById('free-claim-button');
   if (claimBtn) {
@@ -224,9 +250,11 @@ function renderFreeClaimBanner(info) {
         if (result.creditsGranted > 0) {
           logLine(`Welcome bonus: ${result.creditsGranted} free sweep credits added.`);
         } else if (result.blockedByIp) {
-          logLine('Free credits already claimed on this network.');
+          logLine(`Free credits already claimed on this network (${result.ipClaims}/${result.ipMax}).`);
         } else if (result.offerExpired) {
           logLine('Your claim window has expired.');
+        } else if (result.alreadyClaimed) {
+          logLine('Free credits already claimed.');
         }
         const newBalance = await fetchBalance({ force: true });
         updateCreditsBadge(newBalance);
@@ -746,7 +774,6 @@ async function runSweep(live) {
 
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
-    // ---- Gas sponsorships ----
     const gasSponsorships = [];
     if (live) {
       const nativePriceCache = {};
@@ -789,7 +816,6 @@ async function runSweep(live) {
       }
     }
 
-    // ---- Summary ----
     logLine('');
     logLine('═══════════════════════════════════════════════════════════');
     logLine('SWEEP SUMMARY');
@@ -849,7 +875,6 @@ async function runSweep(live) {
 
     logLine('═══════════════════════════════════════════════════════════');
 
-    // ---- Record fee on worker ----
     const hasEvmReceipts = feeReceipts.evm.length > 0;
     const hasSolanaReceipts = feeReceipts.solana.length > 0;
     const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
@@ -920,12 +945,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   getClientId();
 
-  // Kick off the free-claim banner asynchronously so it doesn't block
-  // the rest of the page load. The banner renders itself once the
-  // worker responds.
+  // Kick off the free-claim banner. Retry once on failure so a
+  // transient network blip doesn't hide the launch offer.
   fetchClaimInfo()
     .then(renderFreeClaimBanner)
-    .catch((err) => console.warn('Claim info failed:', err.message));
+    .catch(async (err) => {
+      console.warn('Claim info failed:', err.message, '— retrying once in 2s');
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const info = await fetchClaimInfo();
+        renderFreeClaimBanner(info);
+      } catch (err2) {
+        console.warn('Claim info retry failed:', err2.message);
+        // Silent — the app is still usable, only the banner is missing.
+      }
+    });
 
   const balance = await fetchBalance();
   updateCreditsBadge(balance);
