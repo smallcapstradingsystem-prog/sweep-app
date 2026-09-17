@@ -1,14 +1,5 @@
 /**
  * main.js — Application entry point.
- *
- * Direct-to-user model:
- *   - EVM swaps split atomically via 0x — user gets the non-fee portion
- *     at their destination, fee wallet gets the rest, single tx.
- *   - Solana swaps route via deBridge — user gets the output at their EVM
- *     destination, affiliate fee accrues to FEE_WALLET_SOLANA.
- *   - Bitcoin swaps route via THORChain — user gets the output at their
- *     EVM destination, affiliate fee is paid out automatically by the
- *     AffiliateCollector.
  */
 
 import { ethers } from 'ethers';
@@ -22,7 +13,11 @@ import { previewSolanaWallet, sweepSolana, getConnection, selectSolanaKeypair } 
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
 import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
-import { getClientId, fetchBalance, consumeCredit, invalidateBalanceCache, recordFee, requestGasSponsorship } from './credits.js';
+import {
+  getClientId, fetchBalance, consumeCredit, invalidateBalanceCache,
+  recordFee, requestGasSponsorship,
+  fetchClaimInfo, claimFreeCredits,
+} from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 import {
   FEE_WALLET_EVM, FEE_WALLET_SOLANA, FEE_WALLET_BITCOIN,
@@ -31,6 +26,8 @@ import {
 } from './config.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
+
+let freeClaimTimer = null;
 
 // =====================================================================
 // VALIDATION HELPERS
@@ -67,11 +64,7 @@ function readInputs() {
     solana: $('#family-solana').checked,
     bitcoin: $('#family-bitcoin').checked,
   };
-  const destinations = {
-    evm: $('#dest-evm').value.trim(),
-    solana: '',
-    bitcoin: '',
-  };
+  const destinations = { evm: $('#dest-evm').value.trim(), solana: '', bitcoin: '' };
   const evmChains = $$('#chain-list input[type=checkbox]:checked').map((cb) => cb.value);
 
   let mnemonics = [];
@@ -148,6 +141,104 @@ function syncDestinationFields() {
   if (evmWrap) evmWrap.style.display = (evm || solana || bitcoin) ? '' : 'none';
   const chainList = $('#chain-list');
   if (chainList) chainList.style.display = evm ? '' : 'none';
+}
+
+// =====================================================================
+// FREE CLAIM BANNER
+// =====================================================================
+
+function renderFreeClaimBanner(info) {
+  const banner = $('#free-claim-banner');
+  if (!banner) return;
+
+  if (freeClaimTimer) {
+    clearInterval(freeClaimTimer);
+    freeClaimTimer = null;
+  }
+
+  if (info.claimed) {
+    banner.style.display = '';
+    banner.innerHTML = `
+      <div class="free-claim-inner">
+        <span class="free-claim-icon">✓</span>
+        <div class="free-claim-text">
+          <strong>${info.creditsGranted} free credits added</strong>
+          <p>Your launch bonus is ready to use. Credits never expire.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (info.expired) {
+    banner.style.display = '';
+    banner.innerHTML = `
+      <div class="free-claim-inner">
+        <span class="free-claim-icon">⏱</span>
+        <div class="free-claim-text">
+          <strong>Your 24-hour claim window has ended</strong>
+          <p>Free credits are no longer available on this browser.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  banner.style.display = '';
+  banner.innerHTML = `
+    <div class="free-claim-inner">
+      <span class="free-claim-icon">🎁</span>
+      <div class="free-claim-text">
+        <strong>3 free sweep credits</strong>
+        <p>Claim within <span id="free-claim-countdown">--:--:--</span></p>
+      </div>
+      <button id="free-claim-button" class="btn btn-primary btn-sm">Claim now</button>
+    </div>
+  `;
+
+  const countdownEl = document.getElementById('free-claim-countdown');
+  const renderedAt = Date.now();
+  const updateCountdown = () => {
+    const remaining = info.msRemaining - (Date.now() - renderedAt);
+    if (remaining <= 0) {
+      if (freeClaimTimer) { clearInterval(freeClaimTimer); freeClaimTimer = null; }
+      fetchClaimInfo().then(renderFreeClaimBanner).catch(() => {});
+      return;
+    }
+    const totalSec = Math.floor(remaining / 1000);
+    const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    if (countdownEl) countdownEl.textContent = `${h}:${m}:${s}`;
+  };
+  updateCountdown();
+  freeClaimTimer = setInterval(updateCountdown, 1000);
+
+  const claimBtn = document.getElementById('free-claim-button');
+  if (claimBtn) {
+    claimBtn.addEventListener('click', async () => {
+      claimBtn.disabled = true;
+      claimBtn.textContent = 'Claiming...';
+      try {
+        const result = await claimFreeCredits();
+        if (result.creditsGranted > 0) {
+          logLine(`Welcome bonus: ${result.creditsGranted} free sweep credits added.`);
+        } else if (result.blockedByIp) {
+          logLine('Free credits already claimed on this network.');
+        } else if (result.offerExpired) {
+          logLine('Your claim window has expired.');
+        }
+        const newBalance = await fetchBalance({ force: true });
+        updateCreditsBadge(newBalance);
+        const freshInfo = await fetchClaimInfo();
+        renderFreeClaimBanner(freshInfo);
+      } catch (err) {
+        claimBtn.disabled = false;
+        claimBtn.textContent = 'Try again';
+        logLine(`Claim failed: ${err.message}`);
+      }
+    });
+  }
 }
 
 // =====================================================================
@@ -514,10 +605,7 @@ async function runSweep(live) {
             const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
             const tokens = preview?.tokens || [];
 
-            const sweepOpts = {
-              tokens,
-              userDestination: destinations.evm,
-            };
+            const sweepOpts = { tokens, userDestination: destinations.evm };
 
             let sweepResult;
             let sponsoredForThisWallet = 0n;
@@ -550,11 +638,7 @@ async function runSweep(live) {
 
             const feePortion = BigInt(sweepResult.feeReceivedRaw || '0');
             if (feePortion > 0n) {
-              feeReceipts.evm.push({
-                chain,
-                sourceAddress: address,
-                amountRaw: feePortion,
-              });
+              feeReceipts.evm.push({ chain, sourceAddress: address, amountRaw: feePortion });
             }
 
             for (const s of sweepResult.swaps) {
@@ -596,7 +680,7 @@ async function runSweep(live) {
         logLine(`\n[Solana] ${address}`);
         try {
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
-          const SOL_MIN_FOR_ORDER = 25_000_000n; // 0.025 SOL = reserve (0.015) + one order (0.010)
+          const SOL_MIN_FOR_ORDER = 25_000_000n;
           if (solLamports < SOL_MIN_FOR_ORDER) {
             logLine(`  SKIPPED: source wallet needs ~0.025 SOL to cover reserve plus order fees (has ${(Number(solLamports) / 1e9).toFixed(4)} SOL)`);
             continue;
@@ -608,8 +692,6 @@ async function runSweep(live) {
           });
           state.results.solana.push({ index, ...r });
 
-          // sweepSolana returns userReceivedRaw and feeReceivedRaw.
-          // Both are estimates — the actual USDC settles minutes later.
           const feePortion = BigInt(r.feeReceivedRaw || '0');
           if (feePortion > 0n) {
             feeReceipts.solana.push({
@@ -638,13 +720,11 @@ async function runSweep(live) {
         logLine(`\n[Bitcoin] ${address}`);
         try {
           const r = await sweepBitcoin(address, keyPair, {
-            dryRun,
-            logLine,
+            dryRun, logLine,
             userDestination: destinations.evm,
           });
           state.results.bitcoin.push({ index, ...r });
 
-          // sweepBitcoin returns userReceivedRaw and feeReceivedRaw.
           const feePortion = BigInt(r.feeReceivedRaw || '0');
           if (feePortion > 0n) {
             feeReceipts.bitcoin.push({
@@ -666,14 +746,10 @@ async function runSweep(live) {
 
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
-    // =================================================================
-    // COMPUTE GAS SPONSORSHIPS (EVM only)
-    // =================================================================
+    // ---- Gas sponsorships ----
     const gasSponsorships = [];
-
     if (live) {
       const nativePriceCache = {};
-
       async function getNativePriceUsd(chain) {
         if (nativePriceCache[chain] !== undefined) return nativePriceCache[chain];
         const coinIds = {
@@ -693,7 +769,6 @@ async function runSweep(live) {
 
       for (const [chain, wallets] of Object.entries(sponsoredGasByChain)) {
         if (!chainHadAnySuccess[chain]) continue;
-
         let totalWei = 0n;
         for (const amt of Object.values(wallets)) totalWei += BigInt(amt);
 
@@ -708,15 +783,13 @@ async function runSweep(live) {
           estimatedCostUsdCents: costUsdCents,
           sponsorshipFeeUsdCents: feeUsdCents,
           sponsorshipFeeUsdcRaw: usdCentsToUsdcRaw(feeUsdCents).toString(),
-          nativePriceUsd: nativePriceUsd,
+          nativePriceUsd,
           wallets: Object.keys(wallets),
         });
       }
     }
 
-    // =================================================================
-    // USER-FACING SUMMARY
-    // =================================================================
+    // ---- Summary ----
     logLine('');
     logLine('═══════════════════════════════════════════════════════════');
     logLine('SWEEP SUMMARY');
@@ -776,9 +849,7 @@ async function runSweep(live) {
 
     logLine('═══════════════════════════════════════════════════════════');
 
-    // =================================================================
-    // RECORD FEE ON THE WORKER
-    // =================================================================
+    // ---- Record fee on worker ----
     const hasEvmReceipts = feeReceipts.evm.length > 0;
     const hasSolanaReceipts = feeReceipts.solana.length > 0;
     const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
@@ -790,60 +861,40 @@ async function runSweep(live) {
         for (const entry of feeReceipts.evm) {
           const decimals = entry.chain === 'bnb' ? 18 : 6;
           receipts.push({
-            family: 'evm',
-            chain: entry.chain,
-            sourceAddress: entry.sourceAddress,
-            amountRaw: entry.amountRaw.toString(),
-            decimals,
-            symbol: 'USDC',
-            recipient: FEE_WALLET_EVM,
-            userDestination: destinations.evm,
+            family: 'evm', chain: entry.chain, sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(), decimals, symbol: 'USDC',
+            recipient: FEE_WALLET_EVM, userDestination: destinations.evm,
             feeCollectedAtSwap: true,
           });
         }
 
         for (const entry of feeReceipts.solana) {
           receipts.push({
-            family: 'solana',
-            sourceAddress: entry.sourceAddress,
-            amountRaw: entry.amountRaw.toString(),
-            decimals: 6,
-            symbol: 'USDC',
-            recipient: FEE_WALLET_SOLANA,
-            sourceChain: 'solana',
-            destinationChain: 'ethereum',
-            bridge: 'debridge',
-            orderIds: entry.orderIds,
-            userDestination: destinations.evm,
-            feeCollectedAtSwap: false,
-            requiresManualClaim: true,
+            family: 'solana', sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(), decimals: 6, symbol: 'USDC',
+            recipient: FEE_WALLET_SOLANA, sourceChain: 'solana',
+            destinationChain: 'ethereum', bridge: 'debridge',
+            orderIds: entry.orderIds, userDestination: destinations.evm,
+            feeCollectedAtSwap: false, requiresManualClaim: true,
           });
         }
 
         for (const entry of feeReceipts.bitcoin) {
           receipts.push({
-            family: 'bitcoin',
-            sourceAddress: entry.sourceAddress,
-            amountRaw: entry.amountRaw.toString(),
-            decimals: 6,
-            symbol: 'USDC',
-            recipient: FEE_WALLET_EVM,
-            sourceChain: 'bitcoin',
-            destinationChain: 'ethereum',
-            bridge: 'thorchain',
-            txids: entry.txids,
-            userDestination: destinations.evm,
+            family: 'bitcoin', sourceAddress: entry.sourceAddress,
+            amountRaw: entry.amountRaw.toString(), decimals: 6, symbol: 'USDC',
+            recipient: FEE_WALLET_EVM, sourceChain: 'bitcoin',
+            destinationChain: 'ethereum', bridge: 'thorchain',
+            txids: entry.txids, userDestination: destinations.evm,
             feeCollectedAtSwap: true,
           });
         }
 
         if (receipts.length > 0) {
           await recordFee({
-            receipts,
-            gasSponsorships,
+            receipts, gasSponsorships,
             sweepDurationMs: Date.now() - startTime,
-            successes,
-            failures,
+            successes, failures,
           });
         }
       } catch (e) {
@@ -868,6 +919,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   initPlausible();
 
   getClientId();
+
+  // Kick off the free-claim banner asynchronously so it doesn't block
+  // the rest of the page load. The banner renders itself once the
+  // worker responds.
+  fetchClaimInfo()
+    .then(renderFreeClaimBanner)
+    .catch((err) => console.warn('Claim info failed:', err.message));
+
   const balance = await fetchBalance();
   updateCreditsBadge(balance);
 

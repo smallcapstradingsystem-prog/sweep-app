@@ -70,6 +70,33 @@ export function invalidateBalanceCache() {
 }
 
 // =====================================================================
+// FREE CREDITS
+// =====================================================================
+
+export async function fetchClaimInfo() {
+  const resp = await fetch(`${PAYMENT_WORKER_URL}/credits/claim-info`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId: getClientId() }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+export async function claimFreeCredits() {
+  const resp = await fetch(`${PAYMENT_WORKER_URL}/credits/claim-free`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId: getClientId() }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  if (data.creditsGranted > 0) invalidateBalanceCache();
+  return data;
+}
+
+// =====================================================================
 // CRYPTO PAYMENT
 // =====================================================================
 
@@ -118,14 +145,6 @@ export async function pollCryptoPayment(paymentId, { timeoutMs = 30 * 60 * 1000,
 // GAS SPONSORSHIP
 // =====================================================================
 
-/**
- * Request gas sponsorship for a user wallet on a given chain.
- * Sends exactly the shortfall amount, not a target balance.
- *
- * @param {string} chain           — 'base' | 'arbitrum' | ...
- * @param {string} toAddress       — the user's wallet address
- * @param {string} shortfallWei    — exact amount to send, in wei (decimal string)
- */
 export async function requestGasSponsorship(chain, toAddress, shortfallWei) {
   const resp = await fetch(`${PAYMENT_WORKER_URL}/gas/sponsor`, {
     method: 'POST',

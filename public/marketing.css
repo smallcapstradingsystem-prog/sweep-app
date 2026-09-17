@@ -435,3 +435,61 @@ section .lede { text-align: center; margin-bottom: 60px; }
         grid-template-columns: 1fr;
     }
 }
+
+/* =====================================================================
+   PROMO STRIP
+   ===================================================================== */
+
+.promo-strip {
+  background: linear-gradient(90deg, rgba(88,166,255,0.15), rgba(88,166,255,0.05));
+  border-bottom: 1px solid rgba(88,166,255,0.25);
+  padding: 12px 0;
+  font-size: 14px;
+}
+
+.promo-strip .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.promo-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.promo-strip strong {
+  color: #e6edf3;
+}
+
+.promo-strip span {
+  color: #c9d1d9;
+}
+
+.promo-link {
+  color: #79c0ff;
+  margin-left: 8px;
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.promo-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  .promo-strip {
+    font-size: 13px;
+    padding: 10px 0;
+  }
+  .promo-link {
+    display: block;
+    margin-left: 0;
+    width: 100%;
+    text-align: center;
+    margin-top: 4px;
+  }
+}

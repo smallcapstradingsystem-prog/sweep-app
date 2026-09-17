@@ -2,29 +2,31 @@
  * payment-worker.js — Cloudflare Worker
  * =====================================================================
  * Endpoints:
- *   POST /crypto/quote       — generate a payment address + amount for crypto
- *   POST /crypto/verify      — check if crypto payment arrived, issue credits
- *   POST /credits/balance    — get credit balance for a client ID
- *   POST /credits/consume    — consume one credit (called before a sweep)
- *   POST /gas/sponsor        — fund a user wallet with native gas
- *   POST /fee/record         — record sweep receipts; accumulate Solana orderIds
- *   GET  /fee/pending        — operator view: pending forwards
- *   GET  /fee/summary        — operator view: totals by chain
- *   POST /fee/mark-forwarded — operator view: mark a sweep forwarded
- *   GET  /health             — health check
+ *   POST /crypto/quote          — generate a payment address + amount
+ *   POST /crypto/verify         — check if crypto payment arrived
+ *   POST /credits/balance       — get credit balance for a client ID
+ *   POST /credits/consume       — consume one credit (called before sweep)
+ *   POST /credits/claim-info    — read free-credit claim window state
+ *   POST /credits/claim-free    — grant 3 free credits if within window
+ *   POST /gas/sponsor           — fund a user wallet with native gas
+ *   POST /fee/record            — record sweep receipts
+ *   GET  /fee/pending           — operator view: pending forwards
+ *   GET  /fee/summary           — operator view: totals by chain
+ *   POST /fee/mark-forwarded    — operator view: mark a sweep forwarded
+ *   GET  /health                — health check
  *
  * Required secrets:
  *   CRYPTO_ADDRESS_EVM       — 0x... receiving address (all EVM chains)
  *   CRYPTO_ADDRESS_SOL       — base58 receiving address on Solana
  *   CRYPTO_ADDRESS_BTC       — bc1q... receiving address on Bitcoin
- *   ETHERSCAN_API_KEY        — unified Etherscan V2 key (all EVM chains)
+ *   ETHERSCAN_API_KEY        — unified Etherscan V2 key
  *   HELIUS_API_KEY
  *   GAS_SPONSOR_KEY          — EVM gas sponsor wallet private key
  *   OPERATOR_SECRET          — password for /fee/* operator endpoints
  *
  * KV namespaces:
- *   CREDITS             — client_id → balance; also fee records + rate limits
- *   PENDING_PAYMENTS    — payment_id → { method, expected, received, credits }
+ *   CREDITS             — balances, history, free-claim state, rate limits
+ *   PENDING_PAYMENTS    — crypto payment records
  *   RECEIPTS            — Solana orderIds pending affiliate claim
  */
 
@@ -42,7 +44,6 @@ const BUNDLES = {
   'pack-50':   { credits: 50, priceCents: 15000 },
 };
 
-// Unified Etherscan V2 chain IDs.
 const CHAIN_IDS = {
   ethereum: 1,
   optimism: 10,
@@ -52,8 +53,6 @@ const CHAIN_IDS = {
   arbitrum: 42161,
 };
 
-// Token contract addresses per chain. Native tokens (ETH, SOL, BTC)
-// are not listed here — they're scanned by native-transfer APIs.
 const TOKEN_ADDRESSES = {
   ethereum: {
     USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
@@ -81,29 +80,20 @@ const TOKEN_ADDRESSES = {
   },
 };
 
-// Every method maps to one of the three destination secrets plus
-// (for EVM tokens) a chain + token symbol used by the scanner.
 const METHODS = {
-  // ---- USDC ----
   'usdc-base':     { chain: 'base',     token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdc-arbitrum': { chain: 'arbitrum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdc-optimism': { chain: 'optimism', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdc-polygon':  { chain: 'polygon',  token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdc-bnb':      { chain: 'bnb',      token: 'USDC', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdc-ethereum': { chain: 'ethereum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-
-  // ---- USDT ----
   'usdt-base':     { chain: 'base',     token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdt-arbitrum': { chain: 'arbitrum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdt-optimism': { chain: 'optimism', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdt-polygon':  { chain: 'polygon',  token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdt-bnb':      { chain: 'bnb',      token: 'USDT', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
   'usdt-ethereum': { chain: 'ethereum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-
-  // ---- Native ETH (Base only, cheapest) ----
   'eth-base':      { chain: 'base',     token: 'ETH',  decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
-
-  // ---- Non-EVM ----
   'sol':           { chain: 'solana',   token: 'SOL',  decimals: 9,  envAddress: 'CRYPTO_ADDRESS_SOL' },
   'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8,  envAddress: 'CRYPTO_ADDRESS_BTC' },
 };
@@ -132,6 +122,13 @@ const SPONSOR_RATE_WINDOW_MS = 10 * 60 * 1000;
 const RECEIPTS_KEY = 'pending_solana_order_ids';
 const RECEIPTS_MAX = 5000;
 
+// Free-credit launch bonus.
+const FREE_CLAIM_CREDITS = 3;
+const FREE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;   // 24 hours
+const FREE_CLAIM_START_TTL = 48 * 60 * 60;          // 48h
+const FREE_CLAIM_GRANTED_TTL = 60 * 60 * 24 * 365;  // 1 year
+const FREE_CLAIM_IP_TTL = 60 * 60 * 24 * 30;        // 30 days
+
 // =====================================================================
 // ROUTER
 // =====================================================================
@@ -157,8 +154,10 @@ export default {
       if (path === '/crypto/quote'  && request.method === 'POST') return await handleCryptoQuote(request, env, cors);
       if (path === '/crypto/verify' && request.method === 'POST') return await handleCryptoVerify(request, env, cors);
 
-      if (path === '/credits/balance' && request.method === 'POST') return await handleCreditsBalance(request, env, cors);
-      if (path === '/credits/consume' && request.method === 'POST') return await handleCreditsConsume(request, env, cors);
+      if (path === '/credits/balance'    && request.method === 'POST') return await handleCreditsBalance(request, env, cors);
+      if (path === '/credits/consume'    && request.method === 'POST') return await handleCreditsConsume(request, env, cors);
+      if (path === '/credits/claim-info' && request.method === 'POST') return await handleClaimInfo(request, env, cors);
+      if (path === '/credits/claim-free' && request.method === 'POST') return await handleClaimFree(request, env, cors);
 
       if (path === '/gas/sponsor' && request.method === 'POST') return await handleGasSponsor(request, env, cors);
 
@@ -211,17 +210,10 @@ async function handleCryptoQuote(request, env, cors) {
   await env.PENDING_PAYMENTS.put(
     `crypto:${paymentId}`,
     JSON.stringify({
-      method,
-      chain: methodConfig.chain,
-      token: methodConfig.token,
-      clientId,
-      bundle,
-      credits: bundleConfig.credits,
-      expectedRaw: finalRaw.toString(),
-      decimals: rate.decimals,
-      address,
-      expiresAt,
-      createdAt: new Date().toISOString(),
+      method, chain: methodConfig.chain, token: methodConfig.token,
+      clientId, bundle, credits: bundleConfig.credits,
+      expectedRaw: finalRaw.toString(), decimals: rate.decimals,
+      address, expiresAt, createdAt: new Date().toISOString(),
     }),
     { expirationTtl: 60 * 60 }
   );
@@ -244,11 +236,9 @@ async function getCryptoRate(methodConfig) {
   if (methodConfig.token === 'USDC' || methodConfig.token === 'USDT') {
     return { price: 1.0, decimals: methodConfig.decimals };
   }
-
   const coinIds = { ETH: 'ethereum', SOL: 'solana', BTC: 'bitcoin' };
   const id = coinIds[methodConfig.token];
   if (!id) return null;
-
   try {
     const resp = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`);
     const data = await resp.json();
@@ -271,15 +261,14 @@ async function handleCryptoVerify(request, env, cors) {
   const pending = JSON.parse(pendingRaw);
 
   if (pending.verified) return json({ ok: true, alreadyVerified: true, credits: pending.credits }, 200, cors);
-
   if (new Date(pending.expiresAt) < new Date()) return json({ error: 'payment expired' }, 410, cors);
 
   const found = await scanForPayment(env, pending);
   if (!found) return json({ status: 'pending', message: 'No matching transaction found yet' }, 200, cors);
 
   const balance = await addCredits(env, pending.clientId, pending.credits, {
-    type: 'crypto', method: pending.method, chain: pending.chain, token: pending.token,
-    txHash: found.txHash, credits: pending.credits,
+    type: 'crypto', method: pending.method, chain: pending.chain,
+    token: pending.token, txHash: found.txHash, credits: pending.credits,
   });
 
   pending.verified = true;
@@ -295,33 +284,24 @@ async function scanForPayment(env, pending) {
   const { chain, token, address, expectedRaw } = pending;
   if (chain === 'solana') return await scanSolana(env, address, expectedRaw);
   if (chain === 'bitcoin') return await scanBitcoin(env, address, expectedRaw);
-  // Everything else is EVM
   return await scanEvmChain(env, chain, token, address, expectedRaw);
 }
 
-/**
- * Unified EVM scanner using Etherscan V2.
- * One API key, one endpoint, chainid parameter selects the network.
- */
 async function scanEvmChain(env, chain, token, address, expectedRaw) {
   const apiKey = env.ETHERSCAN_API_KEY;
   if (!apiKey) return null;
-
   const chainId = CHAIN_IDS[chain];
   if (!chainId) return null;
 
   const baseUrl = `https://api.etherscan.io/v2/api?chainid=${chainId}`;
 
-  // ERC-20 tokens (USDC, USDT)
   if (token === 'USDC' || token === 'USDT') {
     const contract = TOKEN_ADDRESSES[chain]?.[token];
     if (!contract) return null;
-
     const url = `${baseUrl}&module=account&action=tokentx&contractaddress=${contract}&address=${address}&sort=desc&apikey=${apiKey}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if (!data.result || !Array.isArray(data.result)) return null;
-
     for (const tx of data.result.slice(0, 20)) {
       if (tx.to?.toLowerCase() === address.toLowerCase() && tx.value === expectedRaw) {
         return { txHash: tx.hash, blockNumber: tx.blockNumber };
@@ -330,13 +310,11 @@ async function scanEvmChain(env, chain, token, address, expectedRaw) {
     return null;
   }
 
-  // Native token (ETH on Base)
   if (token === 'ETH') {
     const url = `${baseUrl}&module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if (!data.result || !Array.isArray(data.result)) return null;
-
     for (const tx of data.result.slice(0, 20)) {
       if (tx.to?.toLowerCase() === address.toLowerCase() && tx.value === expectedRaw) {
         return { txHash: tx.hash, blockNumber: tx.blockNumber };
@@ -410,6 +388,132 @@ async function addCredits(env, clientId, delta, metadata = {}) {
   history.unshift({ delta, balance: next, at: new Date().toISOString(), ...metadata });
   await env.CREDITS.put(`history:${clientId}`, JSON.stringify(history.slice(0, 50)));
   return next;
+}
+
+// =====================================================================
+// FREE CREDITS — CLAIM WINDOW
+// =====================================================================
+
+async function handleClaimInfo(request, env, cors) {
+  const { clientId } = await request.json();
+  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
+    return json({ error: 'clientId required' }, 400, cors);
+  }
+
+  const startKey = `free_claim:start:${clientId}`;
+  const grantedKey = `free_claim:granted:${clientId}`;
+
+  const [startRaw, grantedRaw] = await Promise.all([
+    env.CREDITS.get(startKey),
+    env.CREDITS.get(grantedKey),
+  ]);
+
+  const now = Date.now();
+
+  if (grantedRaw) {
+    const startMs = startRaw ? new Date(startRaw).getTime() : null;
+    return json({
+      ok: true,
+      claimed: true,
+      expired: false,
+      windowStart: startRaw || null,
+      windowEnd: startMs ? new Date(startMs + FREE_CLAIM_WINDOW_MS).toISOString() : null,
+      msRemaining: 0,
+      creditsGranted: FREE_CLAIM_CREDITS,
+    }, 200, cors);
+  }
+
+  let windowStart = startRaw ? new Date(startRaw).getTime() : null;
+
+  if (windowStart === null) {
+    windowStart = now;
+    await env.CREDITS.put(startKey, new Date(windowStart).toISOString(), {
+      expirationTtl: FREE_CLAIM_START_TTL,
+    });
+  }
+
+  const windowEnd = windowStart + FREE_CLAIM_WINDOW_MS;
+  const msRemaining = Math.max(0, windowEnd - now);
+  const expired = msRemaining === 0;
+
+  return json({
+    ok: true,
+    claimed: false,
+    expired,
+    windowStart: new Date(windowStart).toISOString(),
+    windowEnd: new Date(windowEnd).toISOString(),
+    msRemaining,
+    creditsGranted: 0,
+  }, 200, cors);
+}
+
+async function handleClaimFree(request, env, cors) {
+  const { clientId } = await request.json();
+  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
+    return json({ error: 'clientId required' }, 400, cors);
+  }
+
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  const now = Date.now();
+
+  const startKey = `free_claim:start:${clientId}`;
+  const grantedKey = `free_claim:granted:${clientId}`;
+  const ipKey = `free_claim:ip:${ip}`;
+
+  const grantedRaw = await env.CREDITS.get(grantedKey);
+  if (grantedRaw) {
+    return json({
+      ok: true, alreadyClaimed: true, creditsGranted: 0,
+      newBalance: await getBalance(env, clientId),
+    }, 200, cors);
+  }
+
+  const ipClaimed = await env.CREDITS.get(ipKey);
+  if (ipClaimed) {
+    return json({
+      ok: true, blockedByIp: true, creditsGranted: 0,
+      newBalance: await getBalance(env, clientId),
+    }, 200, cors);
+  }
+
+  const startRaw = await env.CREDITS.get(startKey);
+  let windowStart;
+
+  if (startRaw) {
+    windowStart = new Date(startRaw).getTime();
+  } else {
+    windowStart = now;
+    await env.CREDITS.put(startKey, new Date(windowStart).toISOString(), {
+      expirationTtl: FREE_CLAIM_START_TTL,
+    });
+  }
+
+  if (now - windowStart > FREE_CLAIM_WINDOW_MS) {
+    return json({
+      ok: true, offerExpired: true, creditsGranted: 0,
+      newBalance: await getBalance(env, clientId),
+    }, 200, cors);
+  }
+
+  const newBalance = await addCredits(env, clientId, FREE_CLAIM_CREDITS, {
+    type: 'free_claim', source: 'launch_bonus',
+    credits: FREE_CLAIM_CREDITS, ip,
+  });
+
+  await Promise.all([
+    env.CREDITS.put(grantedKey, new Date().toISOString(), {
+      expirationTtl: FREE_CLAIM_GRANTED_TTL,
+    }),
+    env.CREDITS.put(ipKey, new Date().toISOString(), {
+      expirationTtl: FREE_CLAIM_IP_TTL,
+    }),
+  ]);
+
+  return json({
+    ok: true,
+    creditsGranted: FREE_CLAIM_CREDITS,
+    newBalance,
+  }, 200, cors);
 }
 
 // =====================================================================
@@ -552,9 +656,7 @@ async function handleFeeRecord(request, env, cors) {
   }
 
   return json({
-    ok: true,
-    sweepId,
-    status: 'pending',
+    ok: true, sweepId, status: 'pending',
     solanaOrderIdsReceived: solanaOrderIds.length,
     solanaOrderIdsRecorded: recordedCount,
     kvError,
