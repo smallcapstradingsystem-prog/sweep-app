@@ -21,8 +21,6 @@
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
-                <button id="buy-credits-button" class="btn btn-secondary btn-sm">Buy credits</button>
-                <span id="credits-badge" class="credits-badge credits-empty">No credits</span>
             </div>
         </div>
     </nav>
@@ -31,11 +29,9 @@
         <h1 style="margin-bottom: 8px;">Launch App</h1>
         <p class="hint" style="margin-bottom: 32px;">
             Everything runs in your browser. No server sees your keys.
-            <strong>Dry runs are free</strong> — credits are only used on live sweeps.
+            <strong>Dry runs are free</strong> and always available.
             First time here? <a href="/guide.html">Read the guide →</a>
         </p>
-
-        <div id="free-claim-banner" class="free-claim-banner" style="display:none;"></div>
 
         <!-- TONIGHT: softened security claim. The old text said "runs entirely
              in your browser" which is not literally true — the app makes
@@ -162,7 +158,7 @@
             <h2 style="margin-top:32px;">4. Mode</h2>
             <div class="checks">
                 <label><input type="radio" name="mode" value="dry-run" checked> Dry run (free, nothing broadcast)</label>
-                <label><input type="radio" name="mode" value="live"> Live (uses 1 credit, broadcasts real transactions)</label>
+                <label><input type="radio" name="mode" value="live"> Live (broadcasts real transactions)</label>
             </div>
 
             <div class="actions">

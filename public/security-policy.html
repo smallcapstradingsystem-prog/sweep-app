@@ -90,13 +90,31 @@
                 PoolPort LiquiFi runs three Cloudflare Workers:
             </p>
             <ul>
-                <li><strong>RPC proxy</strong> — forwards JSON-RPC calls to Alchemy and Helius so we can hide our API keys. Logs only timestamp, IP, route, and status code. No payload content, ever.</li>
-                <li><strong>Payment worker</strong> — handles credit purchases (crypto), tracks balances keyed by a pseudonymous client ID, records sweep receipts for our own accounting, and independently verifies EVM fee receipts against on-chain transfer logs. Does not receive mnemonic data, private keys, or signed transaction payloads.</li>
+                <li><strong>RPC proxy</strong> — forwards JSON-RPC calls to Alchemy and Helius so we can hide our API keys, and proxies 0x swap quotes so the 0x API key never reaches the browser. Logs only timestamp, IP, route, and status code. No payload content, ever.</li>
+                <li><strong>Payment worker</strong> — sponsors native gas for EVM source wallets that can't afford their sweep, and records sweep fee receipts for the operator's audit trail. Does not receive mnemonic data, private keys, or signed transaction payloads. Does not hold funds or track user balances.</li>
                 <li><strong>Affiliate claim worker</strong> — periodically claims accumulated deBridge affiliate fees on Solana. Runs on a cron schedule; the manual trigger endpoint requires an operator secret. Only the operator's own Solana key is present on this worker, and it can only withdraw fees accrued to the fee wallet.</li>
             </ul>
             <p>
                 None of these workers can spend user funds, sign transactions on a user's behalf, or
                 access user keys.
+            </p>
+        </section>
+
+        <section style="margin-bottom: 48px;">
+            <h2>How the fee is taken</h2>
+            <p>
+                The 10% service fee is collected atomically at swap time by the underlying routing
+                protocol:
+            </p>
+            <ul>
+                <li><strong>EVM:</strong> 0x's AllowanceHolder endpoint accepts a <code>swapFeeRecipient</code> and <code>swapFeeBps</code>. The fee wallet is set as the recipient and 1000 bps (10%) is the fee. The output token is split in the same transaction that executes the swap — 90% to your destination, 10% to the fee wallet.</li>
+                <li><strong>Solana:</strong> deBridge routes the affiliate fee to the fee wallet on settlement, hours after the sweep. The affiliate claim worker collects it on a schedule.</li>
+                <li><strong>Bitcoin:</strong> THORChain collects the affiliate fee at the protocol level.</li>
+            </ul>
+            <p>
+                In every case, the fee is taken by the routing protocol directly — never held by us,
+                even temporarily. There is no manual forwarding step for EVM fees, and no user balance
+                that could be seized or mismanaged.
             </p>
         </section>
 

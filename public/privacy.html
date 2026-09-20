@@ -51,7 +51,7 @@
     <main class="wrap">
         <article class="legal">
             <h1>Privacy Policy</h1>
-            <p class="updated">Last updated: 2026-09-16</p>
+            <p class="updated">Last updated: 2026-09-20</p>
 
             <div class="highlight">
                 <strong>Short version:</strong> We don't have your keys, your
@@ -102,26 +102,48 @@
             </ul>
             <p>Retention: up to 7 days.</p>
 
-            <h3>2.3 Sweep receipts</h3>
+            <h3>2.3 Gas sponsorship records</h3>
             <p>
-                When you complete a live sweep, our payment worker records a
-                receipt for accounting purposes. A receipt includes:
+                When we sponsor gas for an EVM source wallet, we record the
+                sponsorship so we can enforce per-IP rate limits and avoid
+                double-funding on retries. The record includes:
             </p>
             <ul>
-                <li>Your pseudonymous client ID (a random 48-character hex string stored in your browser's localStorage — it is not linked to any identity)</li>
+                <li>The IP address the sponsorship request came from</li>
+                <li>The wallet address that was funded</li>
+                <li>The chain, the amount sent, and the on-chain transaction hash</li>
+                <li>A short-lived idempotency key (deleted after 5 minutes)</li>
+            </ul>
+            <p>
+                We do not store any other wallet information, and we never
+                store mnemonic or private-key material. Retention: rate-limit
+                records up to 10 minutes; idempotency keys up to 5 minutes.
+            </p>
+
+            <h3>2.4 Sweep fee receipts</h3>
+            <p>
+                When you complete a live sweep, the app records a receipt so
+                the operator can see which sweeps happened and reconcile
+                them with on-chain activity. The 10% service fee is taken
+                atomically on-chain by the swap routing protocols (0x,
+                deBridge, THORChain) before the receipt is written — the
+                receipt itself does not move money. A receipt includes:
+            </p>
+            <ul>
+                <li>Your pseudonymous client ID (a random hex string stored in your browser's localStorage — not linked to any identity)</li>
                 <li>The source wallet addresses involved in the sweep</li>
                 <li>The destination address you chose</li>
-                <li>The amount swept and the service fee taken</li>
+                <li>The amount swept and the fee taken</li>
                 <li>On-chain transaction hashes for the swap transactions</li>
+                <li>Any gas sponsorships associated with the sweep, with their USD cost estimate</li>
             </ul>
             <p>
                 We do <strong>not</strong> record your mnemonic, private keys,
-                or any data that could be used to derive them. The receipt
-                exists so we can audit service fee collection and reconcile
-                with on-chain activity. Retention: up to 1 year.
+                or any data that could be used to derive them. Retention: up
+                to 1 year.
             </p>
 
-            <h3>2.4 Analytics</h3>
+            <h3>2.5 Analytics</h3>
             <p>
                 We may use privacy-respecting analytics that do
                 <strong>not</strong> use cookies, do not fingerprint users, and
@@ -174,11 +196,6 @@
                         <td>Your IP, the URL you requested</td>
                         <td>Serving the site, DDoS protection</td>
                     </tr>
-                    <tr>
-                        <td>Square (credit purchases, if used)</td>
-                        <td>Whatever you provide during checkout</td>
-                        <td>Processing credit card payments (optional; crypto payments do not use Square)</td>
-                    </tr>
                 </tbody>
             </table>
 
@@ -195,8 +212,7 @@
                 <code>localStorage</code> to persist:
             </p>
             <ul>
-                <li>A pseudonymous client ID (a random hex string used to track credit balance)</li>
-                <li>Your credit balance cache</li>
+                <li>A pseudonymous client ID (a random hex string, sent only as an identifier on gas sponsorship and fee receipt requests)</li>
             </ul>
             <p>
                 It does <strong>not</strong> persist your mnemonic, private
@@ -209,8 +225,9 @@
             <h2>5. Data retention</h2>
             <p>
                 Server logs are retained as described in §2.1. RPC proxy logs
-                are retained as described in §2.2. Sweep receipts are retained
-                as described in §2.3. Everything else is not collected in the
+                are retained as described in §2.2. Gas sponsorship records are
+                retained as described in §2.3. Sweep fee receipts are retained
+                as described in §2.4. Everything else is not collected in the
                 first place, so there is nothing to retain.
             </p>
 
@@ -228,7 +245,7 @@
                 GDPR, CCPA, or similar laws, including rights to access,
                 correct, or delete personal data. Because we don't collect
                 personal data, most of these rights are moot — but if you
-                have a question or want us to delete a sweep receipt associated
+                have a question or want us to delete a fee receipt associated
                 with your client ID, contact us at
                 <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
             </p>

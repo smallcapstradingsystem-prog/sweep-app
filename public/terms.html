@@ -39,7 +39,7 @@
     <main class="wrap">
         <article class="legal">
             <h1>Terms of Service</h1>
-            <p class="updated">Last updated: 2026-09-16</p>
+            <p class="updated">Last updated: 2026-09-20</p>
 
             <div class="warn">
                 <strong>Not financial advice.</strong> PoolPort LiquiFi is software, not a financial
@@ -70,12 +70,11 @@
                 <li>Operate as a money service business, money transmitter, virtual asset service provider, or exchange in any jurisdiction.</li>
             </ul>
             <p>
-                PoolPort LiquiFi charges a service fee on live sweeps. The fee is taken
-                <strong>at swap time</strong> by the underlying routing protocols
-                (0x on EVM, deBridge on Solana, THORChain on Bitcoin) — 10% of
-                the swept value, with the remaining 90% delivered directly to
-                your destination address. We never take custody of your
-                funds, even temporarily.
+                PoolPort LiquiFi charges a <strong>10% service fee</strong> on live sweeps.
+                The fee is taken <strong>atomically at swap time</strong> by the underlying
+                routing protocols (0x on EVM, deBridge on Solana, THORChain on Bitcoin).
+                90% of the swept value is delivered directly to your destination address in
+                the same transaction. We never take custody of your funds, even temporarily.
             </p>
 
             <h2>3. Your responsibilities</h2>
@@ -108,12 +107,27 @@
                 in the same transaction.
             </p>
             <p>
-                Sweeps are paid for with prepaid credits, purchased separately.
-                Credits are non-refundable except where required by law. Dry
-                runs and previews do not consume credits.
+                There is no up-front payment, no account, and no prepaid credit
+                balance. The fee is taken from the swept value itself, so you
+                cannot lose money you didn't sweep.
             </p>
 
-            <h2>6. Assumption of risk</h2>
+            <h2>6. Gas sponsorship</h2>
+            <p>
+                For EVM source wallets that do not hold enough native token to
+                cover the sweep, we may sponsor a small amount of native gas.
+                Sponsorship is discretionary and rate-limited. When we sponsor
+                gas, we record the sponsorship for accounting purposes and may
+                deduct an equivalent amount from the user's share of the swept
+                value before forwarding, at the rates described on our site.
+            </p>
+            <p>
+                Solana and Bitcoin sweeping are not gas-sponsored. Solana source
+                wallets must hold a small SOL buffer; Bitcoin network fees are
+                deducted from the swept UTXOs.
+            </p>
+
+            <h2>7. Assumption of risk</h2>
             <div class="warn">
                 <strong>You use the Service at your own risk.</strong> Blockchain
                 transactions are risky. You may lose some or all of your funds.
@@ -130,7 +144,7 @@
                 <li><strong>Supply chain risk.</strong> The Service's JavaScript bundle depends on third-party npm packages. A compromised dependency could introduce malicious code.</li>
             </ul>
 
-            <h2>7. No warranty</h2>
+            <h2>8. No warranty</h2>
             <p>
                 THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT
                 WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
@@ -144,7 +158,7 @@
                 the Service will be accurate, reliable, or profitable.
             </p>
 
-            <h2>8. Limitation of liability</h2>
+            <h2>9. Limitation of liability</h2>
             <p>
                 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT
                 SHALL POOLPORT, ITS OFFICERS, DIRECTORS, EMPLOYEES,
@@ -159,7 +173,7 @@
             <p>
                 TO THE EXTENT PERMITTED BY LAW, OUR TOTAL AGGREGATE LIABILITY TO
                 YOU FOR ALL CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR
-                THE SERVICE SHALL NOT EXCEED THE GREATER OF (A) THE AMOUNT YOU
+                THE SERVICE SHALL NOT EXCEED THE GREATER OF (A) THE FEES YOU
                 PAID US IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR (B)
                 ONE HUNDRED U.S. DOLLARS (USD $100).
             </p>
@@ -170,7 +184,7 @@
                 not apply, and you may have additional rights.
             </p>
 
-            <h2>9. Indemnity</h2>
+            <h2>10. Indemnity</h2>
             <p>
                 You agree to indemnify, defend, and hold harmless PoolPort
                 and its officers, directors, employees, agents, and licensors
@@ -182,7 +196,7 @@
                 any transaction you sign using the Service.
             </p>
 
-            <h2>10. Sanctions and geographic restrictions</h2>
+            <h2>11. Sanctions and geographic restrictions</h2>
             <p>
                 You may not use the Service if you are: (a) located in, a
                 resident of, or organized under the laws of any country or
@@ -193,7 +207,7 @@
                 compliance with all laws applicable to your use.
             </p>
 
-            <h2>11. Intellectual property</h2>
+            <h2>12. Intellectual property</h2>
             <p>
                 The Service's source code is proprietary and not publicly
                 distributed. The "PoolPort LiquiFi" name, logo, and marketing materials
@@ -204,7 +218,7 @@
                 why the source is not public and how to request access.
             </p>
 
-            <h2>12. Modifications</h2>
+            <h2>13. Modifications</h2>
             <p>
                 We may modify these Terms at any time. If we make material
                 changes, we will post the updated Terms on this page with a new
@@ -213,14 +227,14 @@
                 Terms.
             </p>
 
-            <h2>13. Termination</h2>
+            <h2>14. Termination</h2>
             <p>
                 We may terminate or suspend your access to the Service at any
                 time, without notice, for any reason, including if we believe
                 you have violated these Terms.
             </p>
 
-            <h2>14. Governing law and disputes</h2>
+            <h2>15. Governing law and disputes</h2>
             <p>
                 These Terms are governed by the laws of Canada, without
                 regard to its conflict of law provisions. Any dispute arising
@@ -229,7 +243,7 @@
                 consent to the personal jurisdiction of those courts.
             </p>
 
-            <h2>15. Miscellaneous</h2>
+            <h2>16. Miscellaneous</h2>
             <p>
                 These Terms constitute the entire agreement between you and us
                 regarding the Service. If any provision is found unenforceable,
@@ -238,7 +252,7 @@
                 or provision.
             </p>
 
-            <h2>16. Contact</h2>
+            <h2>17. Contact</h2>
             <p>
                 Questions about these Terms? Contact us at
                 <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.

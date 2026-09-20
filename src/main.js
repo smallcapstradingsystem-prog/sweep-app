@@ -3,32 +3,23 @@
  */
 
 import { ethers } from 'ethers';
-import { PublicKey } from '@solana/web3.js';
 import QRCode from 'qrcode';
-import { state, resetState, clearAll } from './state.js';
+import { state, clearAll } from './state.js';
 import { createWallet, switchAndVerifyChain } from './wallet.js';
 import { validateMnemonic, deriveAll } from './derive.js';
 import { previewWallet as previewEvm, sweepEvm, getProvider, CHAINS as EVM_CHAINS } from './evm.js';
 import { previewSolanaWallet, sweepSolana, getConnection, selectSolanaKeypair } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
-import { $, $$, el, show, hide, logLine, clearLog } from './ui.js';
+import { $, $$, show, hide, logLine, clearLog } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
+import { getClientId, requestGasSponsorship, recordFee, newIdempotencyKey } from './credits.js';
 import {
-  getClientId, fetchBalance, consumeCredit, invalidateBalanceCache,
-  recordFee, requestGasSponsorship,
-  fetchClaimInfo, claimFreeCredits,
-  newIdempotencyKey,
-} from './credits.js';
-import { showCryptoPaymentModal } from './crypto-pay.js';
-import {
-  FEE_WALLET_EVM, FEE_WALLET_SOLANA, FEE_WALLET_BITCOIN,
-  GAS_SPONSOR_ADDRESS, GAS_PER_TX_COST, MAX_SPONSOR_ATTEMPTS,
+  FEE_WALLET_EVM, FEE_WALLET_SOLANA,
+  GAS_PER_TX_COST, MAX_SPONSOR_ATTEMPTS,
   computeSponsorshipFeeUsdCents, usdCentsToUsdcRaw,
 } from './config.js';
 
 const WC_PROJECT_ID = '74d3ed4f87d14b6cac7556234dfb72a3';
-
-let freeClaimTimer = null;
 
 // =====================================================================
 // VALIDATION HELPERS
@@ -42,25 +33,13 @@ function isSolanaAddress(s) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
 }
 
-function isBitcoinAddress(s) {
-  if (/^bc1[a-z0-9]{39,59}$/.test(s)) return true;
-  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(s)) return true;
-  return false;
-}
-
 // =====================================================================
 // WALLET COUNT
 // =====================================================================
 //
-// 1 credit = 1 wallet swept. A wallet is:
-//   - Mnemonic mode: one mnemonic phrase (spanning its EVM, Solana,
-//     and Bitcoin derivations).
-//   - Connected mode: the single connected address.
-//
-// All three family arrays in derivedKeys are indexed by mnemonic, so
-// their lengths match when the corresponding family is enabled. We
-// take the max to handle the case where EVM is disabled but Solana
-// or Bitcoin is enabled.
+// A "wallet" is one mnemonic (spanning its EVM, Solana, and Bitcoin
+// derivations) or the single connected address. Used only for progress
+// reporting now — there is no billing.
 
 function computeWalletCount() {
   if (!state.derivedKeys) return 0;
@@ -71,24 +50,6 @@ function computeWalletCount() {
     state.derivedKeys.bitcoin.length,
     0,
   );
-}
-
-// Pick the smallest bundle whose credits >= gap. Returns the bundle id
-// string, or null if gap is 0 or negative.
-const BUNDLE_TABLE = [
-  { id: 'single',  credits: 1 },
-  { id: 'pack-5',  credits: 5 },
-  { id: 'pack-10', credits: 10 },
-  { id: 'pack-25', credits: 25 },
-  { id: 'pack-50', credits: 50 },
-];
-
-function suggestBundleFor(gap) {
-  if (!gap || gap <= 0) return null;
-  for (const b of BUNDLE_TABLE) {
-    if (b.credits >= gap) return b.id;
-  }
-  return 'pack-50';
 }
 
 // =====================================================================
@@ -165,18 +126,6 @@ function validateInputs({ walletType, families, destinations, mnemonics }) {
   return { errors, warnings };
 }
 
-function updateCreditsBadge(balance) {
-  const badge = $('#credits-badge');
-  if (!badge) return;
-  if (balance > 0) {
-    badge.textContent = `${balance} credit${balance > 1 ? 's' : ''}`;
-    badge.className = 'credits-badge credits-available';
-  } else {
-    badge.textContent = 'No credits';
-    badge.className = 'credits-badge credits-empty';
-  }
-}
-
 function syncDestinationFields() {
   const evm = $('#family-evm').checked;
   const solana = $('#family-solana').checked;
@@ -192,128 +141,6 @@ function setRunButtonMode(isLive) {
   if (!runBtn) return;
   runBtn.textContent = isLive ? '⚡ EXECUTE LIVE SWEEP' : '▶ Run Dry Run';
   runBtn.className = isLive ? 'btn btn-danger' : 'btn btn-primary';
-}
-
-// =====================================================================
-// FREE CLAIM BANNER
-// =====================================================================
-
-function renderFreeClaimBanner(info) {
-  const banner = $('#free-claim-banner');
-  if (!banner) return;
-
-  if (freeClaimTimer) {
-    clearInterval(freeClaimTimer);
-    freeClaimTimer = null;
-  }
-
-  if (info.claimed) {
-    banner.style.display = '';
-    banner.innerHTML = `
-      <div class="free-claim-inner">
-        <span class="free-claim-icon">✓</span>
-        <div class="free-claim-text">
-          <strong>${info.creditsGranted} free credits added</strong>
-          <p>Your launch bonus is ready to use. Credits never expire.</p>
-        </div>
-      </div>
-    `;
-    return;
-  }
-
-  if (info.blockedByIp) {
-    const used = info.ipClaims ?? '?';
-    const max = info.ipMax ?? '?';
-    banner.style.display = '';
-    banner.innerHTML = `
-      <div class="free-claim-inner">
-        <span class="free-claim-icon">✓</span>
-        <div class="free-claim-text">
-          <strong>Free credits claimed</strong>
-          <p>This launch bonus is limited to ${max} claims per network (${used} used).</p>
-        </div>
-      </div>
-    `;
-    return;
-  }
-
-  if (info.expired) {
-    banner.style.display = '';
-    banner.innerHTML = `
-      <div class="free-claim-inner">
-        <span class="free-claim-icon">⏱</span>
-        <div class="free-claim-text">
-          <strong>Your 24-hour claim window has ended</strong>
-          <p>Free credits are no longer available on this browser.</p>
-        </div>
-      </div>
-    `;
-    return;
-  }
-
-  const isRunning = !info.notStarted;
-  banner.style.display = '';
-  banner.innerHTML = `
-    <div class="free-claim-inner">
-      <span class="free-claim-icon">🎁</span>
-      <div class="free-claim-text">
-        <strong>3 free sweep credits</strong>
-        <p>${isRunning
-          ? `Claim within <span id="free-claim-countdown">--:--:--</span>`
-          : `Claim now to start your 24-hour window`}</p>
-      </div>
-      <button id="free-claim-button" class="btn btn-primary btn-sm">Claim now</button>
-    </div>
-  `;
-
-  const countdownEl = document.getElementById('free-claim-countdown');
-
-  if (isRunning && countdownEl) {
-    const renderedAt = Date.now();
-    const updateCountdown = () => {
-      const remaining = info.msRemaining - (Date.now() - renderedAt);
-      if (remaining <= 0) {
-        if (freeClaimTimer) { clearInterval(freeClaimTimer); freeClaimTimer = null; }
-        fetchClaimInfo().then(renderFreeClaimBanner).catch(() => {});
-        return;
-      }
-      const totalSec = Math.floor(remaining / 1000);
-      const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
-      const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
-      const s = String(totalSec % 60).padStart(2, '0');
-      countdownEl.textContent = `${h}:${m}:${s}`;
-    };
-    updateCountdown();
-    freeClaimTimer = setInterval(updateCountdown, 1000);
-  }
-
-  const claimBtn = document.getElementById('free-claim-button');
-  if (claimBtn) {
-    claimBtn.addEventListener('click', async () => {
-      claimBtn.disabled = true;
-      claimBtn.textContent = 'Claiming...';
-      try {
-        const result = await claimFreeCredits();
-        if (result.creditsGranted > 0) {
-          logLine(`Welcome bonus: ${result.creditsGranted} free sweep credits added.`);
-        } else if (result.blockedByIp) {
-          logLine(`Free credits already claimed on this network (${result.ipClaims}/${result.ipMax}).`);
-        } else if (result.offerExpired) {
-          logLine('Your claim window has expired.');
-        } else if (result.alreadyClaimed) {
-          logLine('Free credits already claimed.');
-        }
-        const newBalance = await fetchBalance({ force: true });
-        updateCreditsBadge(newBalance);
-        const freshInfo = await fetchClaimInfo();
-        renderFreeClaimBanner(freshInfo);
-      } catch (err) {
-        claimBtn.disabled = false;
-        claimBtn.textContent = 'Try again';
-        logLine(`Claim failed: ${err.message}`);
-      }
-    });
-  }
 }
 
 // =====================================================================
@@ -473,8 +300,7 @@ async function runPreview() {
     }
 
     const walletCount = computeWalletCount();
-    const costLabel = walletCount === 1 ? '1 credit' : `${walletCount} credits`;
-    logLine(`\nPreview complete. This sweep covers ${walletCount} wallet${walletCount === 1 ? '' : 's'} (${costLabel} on live run).`);
+    logLine(`\nPreview complete. This sweep covers ${walletCount} wallet${walletCount === 1 ? '' : 's'}.`);
     show('#run-button');
     setRunButtonMode(state.mode === 'live');
 
@@ -488,19 +314,6 @@ async function runPreview() {
     track.error('preview_fatal');
     throw e;
   }
-}
-
-// =====================================================================
-// PAYMENT
-// =====================================================================
-
-async function requirePayment(context = null) {
-  track.paymentStarted('crypto');
-  try {
-    const result = await showCryptoPaymentModal('pack-5', context);
-    track.paymentCompleted('crypto');
-    return result;
-  } catch (err) { throw err; }
 }
 
 // =====================================================================
@@ -597,30 +410,6 @@ async function runSweep(live) {
     logLine('\n⚠ Reminder: EVM wallets with no gas are sponsored automatically.');
     logLine('  Solana source wallets need a small SOL balance to cover transaction fees.');
     logLine('  Bitcoin fees are deducted from the swept UTXOs.');
-
-    let balance = await fetchBalance({ force: true });
-    if (balance < walletCount) {
-      const gap = walletCount - balance;
-      logLine(`You have ${balance} credit${balance === 1 ? '' : 's'} but this sweep needs ${walletCount} (1 per wallet).`);
-      logLine(`Opening payment modal to buy ${gap} more...`);
-
-      try {
-        await requirePayment({
-          gap,
-          suggestedBundle: suggestBundleFor(gap),
-        });
-      } catch (err) {
-        logLine(`Payment cancelled or failed: ${err.message}`);
-        return;
-      }
-
-      balance = await fetchBalance({ force: true });
-      if (balance < walletCount) {
-        logLine(`ERROR: still short — you have ${balance} credit${balance === 1 ? '' : 's'} but need ${walletCount}. Aborting without consuming.`);
-        return;
-      }
-      logLine(`Payment complete. Credits: ${balance}. Proceeding with sweep.`);
-    }
   }
 
   const dryRun = !live;
@@ -631,29 +420,16 @@ async function runSweep(live) {
   let successes = 0;
   let failures = 0;
 
+  // Fee receipts — collected during the sweep, posted at the end.
+  // The fee itself has already been taken on-chain by the routing
+  // protocols. These receipts are for the operator's audit trail.
   const feeReceipts = { evm: [], solana: [], bitcoin: [] };
+
+  // Gas sponsorship accounting — how much native gas the sponsor
+  // funded per chain, so the operator can see the cost side of the
+  // ledger alongside the fee receipts.
   const sponsoredGasByChain = {};
   const chainHadAnySuccess = {};
-
-  const evmFeeForChain = (chain) =>
-    feeReceipts.evm
-      .filter((e) => e.chain === chain)
-      .reduce((sum, e) => sum + e.amountRaw, 0n);
-  const solanaFeeTotal = () => feeReceipts.solana.reduce((sum, e) => sum + e.amountRaw, 0n);
-  const bitcoinFeeTotal = () => feeReceipts.bitcoin.reduce((sum, e) => sum + e.amountRaw, 0n);
-
-  async function consumeWalletCredit(walletIndex) {
-    try {
-      const newBalance = await consumeCredit('sweep', {
-        idempotencyKey: `${sweepIdempotencyKey}:consume:wallet-${walletIndex}`,
-        count: 1,
-      });
-      updateCreditsBadge(newBalance);
-      return { ok: true, newBalance };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  }
 
   try {
     if (families.evm) {
@@ -665,26 +441,12 @@ async function runSweep(live) {
 
         logLine(`\n─────────────── Wallet ${walletIndex + 1}/${walletCount} (EVM) ───────────────`);
 
-        if (live) {
-          const consumeRes = await consumeWalletCredit(walletIndex);
-          if (!consumeRes.ok) {
-            logLine(`  STOPPING: could not consume credit for wallet ${walletIndex + 1}: ${consumeRes.error}`);
-            logLine(`  Remaining wallets were not charged.`);
-            break;
-          }
-          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
-        }
-
-        // ─── Build signer ───
         let signer;
         try {
           if (state.walletType === 'mnemonic') {
             const provider = getProvider(inputs.evmChains[0] || 'base');
             signer = entry.wallet.connect(provider);
           } else {
-            // For connected wallets, getEthersSigner ignores the passed
-            // provider and uses the wallet's own. We still pass the
-            // first chain's provider for consistency; it's discarded.
             const provider = getProvider(inputs.evmChains[0] || 'base');
             signer = await state.wallet.getEthersSigner(provider);
           }
@@ -703,16 +465,6 @@ async function runSweep(live) {
 
           logLine(`\n[EVM ${chain}] ${address}`);
 
-          // ─── Chain switch + verification ───
-          //
-          // For backends with a chain concept (extension, WalletConnect)
-          // this asks the wallet to move and verifies the move happened.
-          // For backends without one (mnemonic, hardware), the switch
-          // is a no-op and the signer will use whatever chainId is on
-          // the tx.
-          //
-          // On failure after retries, we skip this chain for this wallet
-          // and continue. Other chains and other wallets are unaffected.
           if (state.walletType !== 'mnemonic') {
             const cfg = EVM_CHAINS[chain];
             const switchResult = await switchAndVerifyChain(state.wallet, cfg.chainId, logLine);
@@ -724,7 +476,6 @@ async function runSweep(live) {
           }
 
           try {
-            const provider = getProvider(chain);
             const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
             const tokens = preview?.tokens || [];
 
@@ -752,11 +503,6 @@ async function runSweep(live) {
                 throw e;
               }
             } else {
-              // Dry run still needs a valid signer even though nothing
-              // is signed. For extension/wc, getEthersSigner already
-              // returned a JsonRpcSigner; for mnemonic we connected the
-              // wallet to the provider. Both work with sweepEvm's
-              // dry-run path because it never calls signer.sendTransaction.
               sweepResult = await sweepEvm(chain, signer, { ...sweepOpts, dryRun: true });
             }
 
@@ -816,17 +562,6 @@ async function runSweep(live) {
         logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Solana) ───────────────`);
         logLine(`[Solana] ${address}`);
 
-        const evmHandledThisIndex = families.evm && state.derivedKeys.evm.some((e) => e.index === index);
-        if (live && !evmHandledThisIndex) {
-          const consumeRes = await consumeWalletCredit(index);
-          if (!consumeRes.ok) {
-            logLine(`  STOPPING: could not consume credit for wallet ${index + 1}: ${consumeRes.error}`);
-            logLine(`  Remaining wallets were not charged.`);
-            break;
-          }
-          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
-        }
-
         try {
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
           const SOL_MIN_FOR_ORDER = 25_000_000n;
@@ -869,20 +604,6 @@ async function runSweep(live) {
         logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Bitcoin) ───────────────`);
         logLine(`[Bitcoin] ${address}`);
 
-        const evmHandledThisIndex = families.evm && state.derivedKeys.evm.some((e) => e.index === index);
-        const solanaHandledThisIndex = families.solana && state.derivedKeys.solana.some((s) => s.index === index);
-        const alreadyConsumed = evmHandledThisIndex || solanaHandledThisIndex;
-
-        if (live && !alreadyConsumed) {
-          const consumeRes = await consumeWalletCredit(index);
-          if (!consumeRes.ok) {
-            logLine(`  STOPPING: could not consume credit for wallet ${index + 1}: ${consumeRes.error}`);
-            logLine(`  Remaining wallets were not charged.`);
-            break;
-          }
-          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
-        }
-
         try {
           const r = await sweepBitcoin(address, keyPair, {
             dryRun, logLine,
@@ -911,6 +632,12 @@ async function runSweep(live) {
 
     logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
 
+    // ─── Gas sponsorship accounting ───
+    // For each chain that had at least one successful swap, sum the
+    // sponsored wei across wallets, price it in USD, and apply the
+    // sponsorship fee rule (flat $1 min, 2× actual above $1). The
+    // result rides along on the fee receipt so the worker's operator
+    // view can show net-after-sponsorship, not gross.
     const gasSponsorships = [];
     if (live) {
       const nativePriceCache = {};
@@ -958,15 +685,7 @@ async function runSweep(live) {
     logLine('SWEEP SUMMARY');
     logLine('═══════════════════════════════════════════════════════════');
 
-    const chainsSwept = [];
-    for (const chain of inputs.evmChains) {
-      if (evmFeeForChain(chain) > 0n) chainsSwept.push(chain);
-    }
-    if (solanaFeeTotal() > 0n) chainsSwept.push('solana→eth');
-    if (bitcoinFeeTotal() > 0n) chainsSwept.push('bitcoin→eth');
-
     logLine(`  Wallets swept:     ${walletCount}`);
-    logLine(`  Chains swept:      ${chainsSwept.length ? chainsSwept.join(', ') : '(none)'}`);
     logLine(`  Tokens processed:  ${successes + failures}`);
     logLine(`  Successful swaps:  ${successes}`);
     if (failures > 0) logLine(`  Skipped:           ${failures}`);
@@ -1007,12 +726,26 @@ async function runSweep(live) {
       logLine(`  Total to you:      ~$${totalUserValue.toFixed(2)}`);
       logLine(`  Destination:       ${destinations.evm || '(not set)'}`);
       logLine(`  Estimated time:    within a few minutes`);
+
+      if (gasSponsorships.length > 0) {
+        logLine('');
+        logLine('  Gas sponsorship (cost to operator):');
+        for (const gs of gasSponsorships) {
+          logLine(`    ${gs.chain.padEnd(10)} ${(gs.estimatedCostUsdCents / 100).toFixed(2)} USD actual, ${(gs.sponsorshipFeeUsdCents / 100).toFixed(2)} USD billed`);
+        }
+      }
+
       logLine('');
       logLine('  Thank you for using PoolPort LiquiFi.');
     }
 
     logLine('═══════════════════════════════════════════════════════════');
 
+    // ─── Record fee receipts ───
+    // The 10% was already taken on-chain by the routing protocols.
+    // This call is the operator's audit trail — it does not move
+    // money. Gas sponsorships ride along so the operator sees net
+    // after paying for user gas.
     const hasEvmReceipts = feeReceipts.evm.length > 0;
     const hasSolanaReceipts = feeReceipts.solana.length > 0;
     const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
@@ -1056,7 +789,8 @@ async function runSweep(live) {
         }
 
         await recordFee({
-          receipts, gasSponsorships,
+          receipts,
+          gasSponsorships,
           sweepDurationMs: Date.now() - startTime,
           successes, failures,
         }, {
@@ -1084,22 +818,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   initPlausible();
 
   getClientId();
-
-  fetchClaimInfo()
-    .then(renderFreeClaimBanner)
-    .catch(async (err) => {
-      console.warn('Claim info failed:', err.message, '— retrying once in 2s');
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const info = await fetchClaimInfo();
-        renderFreeClaimBanner(info);
-      } catch (err2) {
-        console.warn('Claim info retry failed:', err2.message);
-      }
-    });
-
-  const balance = await fetchBalance();
-  updateCreditsBadge(balance);
 
   $$('input[name=wallet-type]').forEach((radio) => {
     radio.addEventListener('change', (e) => {
@@ -1131,14 +849,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#run-button').addEventListener('click', () => {
     runSweep(state.mode === 'live');
-  });
-
-  $('#buy-credits-button')?.addEventListener('click', async () => {
-    try {
-      await requirePayment();
-      const newBalance = await fetchBalance({ force: true });
-      updateCreditsBadge(newBalance);
-    } catch (err) { console.error('Buy credits failed:', err); }
   });
 
   $('#clear-button').addEventListener('click', async () => {

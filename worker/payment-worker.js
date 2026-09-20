@@ -1,50 +1,28 @@
 /**
  * payment-worker.js — Cloudflare Worker
  * =====================================================================
- * PoolPort LiquiFi — credit purchases, gas sponsorship, sweep commits,
- * and fee recording.
+ * PoolPort LiquiFi — gas sponsorship and fee receipt recording.
  *
  * Endpoints:
- *   POST /crypto/quote          — generate a payment address + amount
- *   POST /crypto/verify         — check if crypto payment arrived
- *   POST /credits/balance       — get credit balance for a client ID
- *   POST /credits/consume       — consume one credit
- *   POST /credits/claim-info    — read free-credit claim window state
- *   POST /credits/claim-free    — grant 2 free credits if within window
  *   POST /gas/sponsor           — fund a user wallet with native gas
- *   POST /sweep/commit          — commit a sweep's destination (server-authoritative)
- *   POST /sweep/destination     — update a pending sweep's destination
- *   POST /fee/record            — record sweep receipts
+ *   POST /fee/record            — record sweep receipts (operator audit)
  *   GET  /fee/pending           — operator view: pending forwards
  *   GET  /fee/summary           — operator view: totals by chain
  *   POST /fee/mark-forwarded    — operator view: mark a sweep forwarded
- *   POST /admin/credits/grant   — grant credits to a client (operator)
- *   POST /admin/credits/lookup  — read balance + history for a client (operator)
- *   GET  /admin/credits/list    — enumerate client balances (operator)
- *   POST /admin/clients/lookup-by-fingerprint — find clients by fingerprint (operator)
  *   GET  /health                — health check
  *
  * Required secrets:
- *   CRYPTO_ADDRESS_EVM       — 0x... receiving address (all EVM chains)
- *   CRYPTO_ADDRESS_SOL       — base58 receiving address on Solana
- *   CRYPTO_ADDRESS_BTC       — bc1q... receiving address on Bitcoin
- *   CRYPTO_ADDRESS_TRON      — T... receiving address on TRON (USDT-TRC20)
- *   ETHERSCAN_API_KEY        — unified Etherscan V2 key
- *   HELIUS_API_KEY           — Solana transaction indexer
- *   TRONGRID_API_KEY         — TronGrid API key for TRC20 transfer scanning
  *   GAS_SPONSOR_KEY          — EVM gas sponsor wallet. Accepts EITHER:
  *                              - a 0x-prefixed 64-char hex private key, OR
  *                              - a BIP-39 mnemonic (12/15/18/21/24 words)
- *   OPERATOR_SECRET          — password for /fee/* and /admin/* endpoints.
+ *   OPERATOR_SECRET          — password for /fee/* endpoints.
  *
  * Optional secrets:
  *   ALLOWED_ORIGINS          — comma-separated list of origins for CORS.
  *
  * KV namespaces:
- *   CREDITS             — paid balances, free-credit pool, history, free-claim
- *                         state, rate limits, fee records, sweep commits,
- *                         idempotency keys, admin rate limits, client metadata
- *   PENDING_PAYMENTS    — crypto payment records
+ *   CREDITS             — sponsor rate limits, sponsor idempotency keys,
+ *                         fee records, fee pending index
  */
 
 import { ethers } from 'ethers';
@@ -57,67 +35,6 @@ import { ethers } from 'ethers';
 // in sync manually — if the client changes FEE_WALLET_EVM, update
 // this and redeploy.
 const FEE_WALLET_EVM = '0x8B180186C79D146fd5617B31A9e2A3d938954Fa9';
-
-const BUNDLES = {
-  'single':    { credits: 1,  priceCents: 1000 },  // $10.00
-  'pack-5':    { credits: 5,  priceCents: 2000 },  // $20.00
-  'pack-10':   { credits: 10, priceCents: 4000 },  // $40.00
-  'pack-25':   { credits: 25, priceCents: 8000 },  // $80.00
-  'pack-50':   { credits: 50, priceCents: 15000 }, // $150.00
-};
-
-const CHAIN_IDS = {
-  ethereum: 1, optimism: 10, bnb: 56, polygon: 137, base: 8453, arbitrum: 42161,
-};
-
-const TOKEN_ADDRESSES = {
-  ethereum: {
-    USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-    USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-  },
-  optimism: {
-    USDC: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-    USDT: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
-  },
-  bnb: {
-    USDC: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-    USDT: '0x55d398326f99059fF775485246999027B3197955',
-  },
-  polygon: {
-    USDC: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
-    USDT: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
-  },
-  base: {
-    USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-    USDT: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
-  },
-  arbitrum: {
-    USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
-  },
-  tron: {
-    USDT: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-  },
-};
-
-const METHODS = {
-  'usdc-base':     { chain: 'base',     token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdc-arbitrum': { chain: 'arbitrum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdc-optimism': { chain: 'optimism', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdc-polygon':  { chain: 'polygon',  token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdc-bnb':      { chain: 'bnb',      token: 'USDC', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdc-ethereum': { chain: 'ethereum', token: 'USDC', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-base':     { chain: 'base',     token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-arbitrum': { chain: 'arbitrum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-optimism': { chain: 'optimism', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-polygon':  { chain: 'polygon',  token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-bnb':      { chain: 'bnb',      token: 'USDT', decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-ethereum': { chain: 'ethereum', token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'usdt-tron':     { chain: 'tron',     token: 'USDT', decimals: 6,  envAddress: 'CRYPTO_ADDRESS_TRON' },
-  'eth-base':      { chain: 'base',     token: 'ETH',  decimals: 18, envAddress: 'CRYPTO_ADDRESS_EVM' },
-  'sol':           { chain: 'solana',   token: 'SOL',  decimals: 9,  envAddress: 'CRYPTO_ADDRESS_SOL' },
-  'btc':           { chain: 'bitcoin',  token: 'BTC',  decimals: 8,  envAddress: 'CRYPTO_ADDRESS_BTC' },
-};
 
 const SPONSOR_RPC = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
@@ -141,33 +58,6 @@ const SPONSOR_MAX_WEI = {
 const SPONSOR_RATE_MAX = 20;
 const SPONSOR_RATE_WINDOW_MS = 10 * 60 * 1000;
 const SPONSOR_IDEM_TTL = 60 * 5;
-const CONSUME_IDEM_TTL = 60 * 60 * 24 * 30;
-const CRYPTO_VERIFY_LOCK_TTL = 30;
-
-const PENDING_PAYMENT_TTL = 90 * 60;
-const NO_MATCH_CACHE_TTL = 5;
-const CHAIN_SCAN_CACHE_TTL = 10;
-
-const FREE_CLAIM_CREDITS = 2;
-const FREE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
-const FREE_CLAIM_USE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const FREE_CLAIM_START_TTL = 48 * 60 * 60;
-const FREE_CLAIM_GRANTED_TTL = 60 * 60 * 24 * 365;
-const FREE_CLAIM_IP_MAX = 2;
-const FREE_CLAIM_IP_TTL = 60 * 60 * 24 * 7;
-
-const FREE_CLAIM_FINGERPRINT_MAX = 2;
-const FREE_CLAIM_FINGERPRINT_TTL = 60 * 60 * 24 * 7;
-
-const FREE_CREDITS_TTL = Math.ceil(FREE_CLAIM_USE_WINDOW_MS / 1000) + 60;
-
-const SWEEP_COMMIT_TTL = 60 * 60 * 24 * 30;
-
-const ADMIN_AUTH_FAIL_MAX = 10;
-const ADMIN_AUTH_FAIL_WINDOW_MS = 15 * 60 * 1000;
-
-const ADMIN_CALL_MAX = 120;
-const ADMIN_RATE_WINDOW_MS = 10 * 60 * 1000;
 
 // =====================================================================
 // CORS
@@ -185,76 +75,14 @@ function corsFor(request, env) {
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Operator-Secret',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Operator-Secret, X-Client-Id, Idempotency-Key',
     'Vary': 'Origin',
   };
 }
 
 // =====================================================================
-// AMOUNT ROUNDING
+// SPONSOR WALLET CONSTRUCTION
 // =====================================================================
-
-const ROUNDING_STEP_RAW = {
-  USDC: (decimals) => decimals === 6 ? 10n ** 4n : 10n ** 16n,
-  USDT: (decimals) => decimals === 6 ? 10n ** 4n : 10n ** 16n,
-  ETH:  ()         => 10n ** 14n,
-  SOL:  ()         => 10n ** 6n,
-  BTC:  ()         => 10n ** 3n,
-};
-
-const SUFFIX_RANGE = 10000n;
-
-function roundUpToTypable(token, decimals, raw) {
-  const stepFn = ROUNDING_STEP_RAW[token];
-  if (!stepFn) return raw;
-
-  const step = stepFn(decimals);
-  const rounded = ((raw + step - 1n) / step) * step;
-  const maxOffset = step - 1n;
-  const offset = maxOffset > 0n
-    ? BigInt(Math.floor(Math.random() * Number(SUFFIX_RANGE))) % maxOffset + 1n
-    : 0n;
-  return rounded + offset;
-}
-
-function toleranceFor(expectedRaw) {
-  const expected = BigInt(expectedRaw);
-  return expected / 1000n;
-}
-
-// =====================================================================
-// QR PAYLOAD BUILDERS
-// =====================================================================
-
-function buildQrPayload(chain, token, address, expectedRaw, decimals) {
-  if (chain === 'solana') {
-    const amount = formatUnits(expectedRaw, decimals);
-    return `solana:${address}?amount=${amount}`;
-  }
-  if (chain === 'bitcoin') {
-    const amount = formatUnits(expectedRaw, decimals);
-    return `bitcoin:${address}?amount=${amount}`;
-  }
-  if (chain === 'tron') {
-    return address;
-  }
-  const chainId = CHAIN_IDS[chain];
-  if (!chainId) return address;
-  if (token === 'ETH') {
-    return `ethereum:${address}@${chainId}?value=${expectedRaw}`;
-  }
-  const contract = TOKEN_ADDRESSES[chain]?.[token];
-  if (!contract) return address;
-  return `ethereum:${contract}@${chainId}/transfer?address=${address}&uint256=${expectedRaw}`;
-}
-
-function formatUnits(raw, decimals) {
-  const s = BigInt(raw).toString();
-  const padded = s.padStart(decimals + 1, '0');
-  const whole = padded.slice(0, padded.length - decimals);
-  const frac = padded.slice(padded.length - decimals).replace(/0+$/, '');
-  return frac.length ? `${whole}.${frac}` : whole;
-}
 
 const HEX_KEY_RE = /^0x[a-fA-F0-9]{64}$/;
 const MNEMONIC_RE = /^(\S+\s+){11,23}\S+$/;
@@ -299,28 +127,12 @@ export default {
     try {
       if (path === '/health') return json({ ok: true, time: new Date().toISOString() }, 200, cors);
 
-      if (path === '/crypto/quote'  && request.method === 'POST') return await handleCryptoQuote(request, env, cors);
-      if (path === '/crypto/verify' && request.method === 'POST') return await handleCryptoVerify(request, env, cors);
-
-      if (path === '/credits/balance'    && request.method === 'POST') return await handleCreditsBalance(request, env, cors);
-      if (path === '/credits/consume'    && request.method === 'POST') return await handleCreditsConsume(request, env, cors);
-      if (path === '/credits/claim-info' && request.method === 'POST') return await handleClaimInfo(request, env, cors);
-      if (path === '/credits/claim-free' && request.method === 'POST') return await handleClaimFree(request, env, cors);
-
       if (path === '/gas/sponsor' && request.method === 'POST') return await handleGasSponsor(request, env, cors);
-
-      if (path === '/sweep/commit'      && request.method === 'POST') return await handleSweepCommit(request, env, cors);
-      if (path === '/sweep/destination' && request.method === 'POST') return await handleSweepDestination(request, env, cors);
 
       if (path === '/fee/record'          && request.method === 'POST') return await handleFeeRecord(request, env, cors);
       if (path === '/fee/pending'         && request.method === 'GET')  return await handleFeePending(request, env, cors);
       if (path === '/fee/mark-forwarded'  && request.method === 'POST') return await handleFeeMarkForwarded(request, env, cors);
       if (path === '/fee/summary'         && request.method === 'GET')  return await handleFeeSummary(request, env, cors);
-
-      if (path === '/admin/credits/grant'  && request.method === 'POST') return await handleAdminCreditsGrant(request, env, cors);
-      if (path === '/admin/credits/lookup' && request.method === 'POST') return await handleAdminCreditsLookup(request, env, cors);
-      if (path === '/admin/credits/list'   && request.method === 'GET')  return await handleAdminCreditsList(request, env, cors);
-      if (path === '/admin/clients/lookup-by-fingerprint' && request.method === 'POST') return await handleAdminClientLookupByFingerprint(request, env, cors);
 
       return json({ error: 'not found' }, 404, cors);
     } catch (err) {
@@ -335,736 +147,6 @@ export default {
     }
   },
 };
-
-// =====================================================================
-// CRYPTO — QUOTE
-// =====================================================================
-
-export async function handleCryptoQuote(request, env, cors) {
-  const { clientId, bundle = 'single', method = 'usdc-base' } = await request.json();
-
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-
-  const bundleConfig = BUNDLES[bundle];
-  if (!bundleConfig) return json({ error: `unknown bundle: ${bundle}` }, 400, cors);
-
-  const methodConfig = METHODS[method];
-  if (!methodConfig) return json({ error: `unknown method: ${method}` }, 400, cors);
-
-  const address = env[methodConfig.envAddress];
-  if (!address) return json({ error: `crypto address not configured for ${method}` }, 500, cors);
-
-  const rate = await getCryptoRate(methodConfig);
-  if (!rate) return json({ error: 'could not fetch exchange rate' }, 502, cors);
-
-  const usdAmount = bundleConfig.priceCents / 100;
-  const cryptoAmount = usdAmount / rate.price;
-  const baseRaw = BigInt(Math.round(cryptoAmount * Math.pow(10, rate.decimals)));
-
-  const finalRaw = roundUpToTypable(rate.token, rate.decimals, baseRaw);
-
-  const paymentId = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-
-  const qrPayload = buildQrPayload(
-    methodConfig.chain, methodConfig.token, address, finalRaw, rate.decimals
-  );
-
-  await env.PENDING_PAYMENTS.put(
-    `crypto:${paymentId}`,
-    JSON.stringify({
-      method, chain: methodConfig.chain, token: methodConfig.token,
-      clientId, bundle, credits: bundleConfig.credits,
-      expectedRaw: finalRaw.toString(), decimals: rate.decimals,
-      address, expiresAt, createdAt: new Date().toISOString(),
-    }),
-    { expirationTtl: PENDING_PAYMENT_TTL }
-  );
-
-  return json({
-    payment_id: paymentId,
-    chain: methodConfig.chain,
-    token: methodConfig.token,
-    address,
-    amount: Number(finalRaw) / Math.pow(10, rate.decimals),
-    amount_raw: finalRaw.toString(),
-    decimals: rate.decimals,
-    usd_price: usdAmount,
-    credits: bundleConfig.credits,
-    expires_at: expiresAt,
-    qr_payload: qrPayload,
-  }, 200, cors);
-}
-
-export async function getCryptoRate(methodConfig) {
-  if (methodConfig.token === 'USDC' || methodConfig.token === 'USDT') {
-    return { price: 1.0, decimals: methodConfig.decimals, token: methodConfig.token };
-  }
-  const coinIds = { ETH: 'ethereum', SOL: 'solana', BTC: 'bitcoin' };
-  const id = coinIds[methodConfig.token];
-  if (!id) return null;
-  try {
-    const resp = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`);
-    const data = await resp.json();
-    const price = data[id]?.usd;
-    if (!price) return null;
-    return { price, decimals: methodConfig.decimals, token: methodConfig.token };
-  } catch { return null; }
-}
-
-// =====================================================================
-// CRYPTO — VERIFY
-// =====================================================================
-
-export async function handleCryptoVerify(request, env, cors) {
-  const { payment_id } = await request.json();
-  if (!payment_id) return json({ error: 'payment_id required' }, 400, cors);
-
-  const pendingRaw = await env.PENDING_PAYMENTS.get(`crypto:${payment_id}`);
-  if (!pendingRaw) return json({ error: 'payment not found or expired' }, 404, cors);
-  const pending = JSON.parse(pendingRaw);
-
-  if (pending.verified) return json({ ok: true, alreadyVerified: true, credits: pending.credits }, 200, cors);
-  if (new Date(pending.expiresAt) < new Date()) return json({ error: 'payment expired' }, 410, cors);
-
-  const lockKey = `crypto:lock:${payment_id}`;
-  const lock = await env.CREDITS.get(lockKey);
-  if (lock) {
-    return json({ status: 'pending', message: 'verification in progress' }, 200, cors);
-  }
-  await env.CREDITS.put(lockKey, '1', { expirationTtl: CRYPTO_VERIFY_LOCK_TTL });
-
-  try {
-    const found = await scanForPayment(env, pending, payment_id);
-    if (!found) return json({ status: 'pending', message: 'No matching transaction found yet' }, 200, cors);
-
-    const refreshedRaw = await env.PENDING_PAYMENTS.get(`crypto:${payment_id}`);
-    if (refreshedRaw) {
-      const refreshed = JSON.parse(refreshedRaw);
-      if (refreshed.verified) {
-        return json({ ok: true, alreadyVerified: true, credits: refreshed.credits }, 200, cors);
-      }
-    }
-
-    const balance = await addCredits(env, pending.clientId, pending.credits, {
-      type: 'crypto', method: pending.method, chain: pending.chain,
-      token: pending.token, txHash: found.txHash, credits: pending.credits,
-      receivedRaw: found.receivedRaw || pending.expectedRaw,
-    });
-
-    pending.verified = true;
-    pending.txHash = found.txHash;
-    pending.receivedRaw = found.receivedRaw || pending.expectedRaw;
-    await env.PENDING_PAYMENTS.put(`crypto:${payment_id}`, JSON.stringify(pending), {
-      expirationTtl: 60 * 60 * 24 * 7,
-    });
-
-    await env.CREDITS.delete(`crypto:nomatch:${payment_id}`).catch(() => {});
-
-    return json({ ok: true, creditsAdded: pending.credits, newBalance: balance, txHash: found.txHash }, 200, cors);
-  } finally {
-    await env.CREDITS.delete(lockKey).catch(() => {});
-  }
-}
-
-export async function scanForPayment(env, pending, paymentId) {
-  if (paymentId) {
-    const noMatchKey = `crypto:nomatch:${paymentId}`;
-    const cached = await env.CREDITS.get(noMatchKey);
-    if (cached) return null;
-  }
-
-  const { chain, token, address, expectedRaw } = pending;
-  let result = null;
-  if (chain === 'solana') result = await scanSolana(env, address, expectedRaw);
-  else if (chain === 'bitcoin') result = await scanBitcoin(env, address, expectedRaw);
-  else if (chain === 'tron') result = await scanTron(env, address, expectedRaw, token);
-  else result = await scanEvmChain(env, chain, token, address, expectedRaw);
-
-  if (!result && paymentId) {
-    await env.CREDITS.put(`crypto:nomatch:${paymentId}`, '1', {
-      expirationTtl: NO_MATCH_CACHE_TTL,
-    }).catch(() => {});
-  }
-
-  return result;
-}
-
-export async function scanEvmChain(env, chain, token, address, expectedRaw) {
-  const apiKey = env.ETHERSCAN_API_KEY;
-  if (!apiKey) return null;
-  const chainId = CHAIN_IDS[chain];
-  if (!chainId) return null;
-
-  const cacheKey = `evm:scan:${chain}:${token}:${address}`;
-  let rows = null;
-
-  const cachedRaw = await env.CREDITS.get(cacheKey);
-  if (cachedRaw) {
-    try { rows = JSON.parse(cachedRaw); } catch { rows = null; }
-  }
-
-  const expected = BigInt(expectedRaw);
-  const tol = toleranceFor(expectedRaw);
-  const lo = expected - tol;
-  const hi = expected + tol;
-
-  if (!rows) {
-    const baseUrl = `https://api.etherscan.io/v2/api?chainid=${chainId}`;
-
-    if (token === 'USDC' || token === 'USDT') {
-      const contract = TOKEN_ADDRESSES[chain]?.[token];
-      if (!contract) return null;
-      const url = `${baseUrl}&module=account&action=tokentx&contractaddress=${contract}&address=${address}&sort=desc&apikey=${apiKey}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (!data.result || !Array.isArray(data.result)) return null;
-      rows = data.result.slice(0, 20).map((tx) => ({
-        hash: tx.hash,
-        blockNumber: tx.blockNumber,
-        to: tx.to,
-        value: tx.value,
-      }));
-    } else if (token === 'ETH') {
-      const url = `${baseUrl}&module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (!data.result || !Array.isArray(data.result)) return null;
-      rows = data.result.slice(0, 20).map((tx) => ({
-        hash: tx.hash,
-        blockNumber: tx.blockNumber,
-        to: tx.to,
-        value: tx.value,
-      }));
-    } else {
-      return null;
-    }
-
-    await env.CREDITS.put(cacheKey, JSON.stringify(rows), {
-      expirationTtl: CHAIN_SCAN_CACHE_TTL,
-    }).catch(() => {});
-  }
-
-  for (const tx of rows) {
-    if (tx.to?.toLowerCase() !== address.toLowerCase()) continue;
-    const v = BigInt(tx.value);
-    if (v >= lo && v <= hi) {
-      return { txHash: tx.hash, blockNumber: tx.blockNumber, receivedRaw: tx.value };
-    }
-  }
-  return null;
-}
-
-export async function scanSolana(env, address, expectedRaw) {
-  const cacheKey = `sol:scan:${address}`;
-  let transfers = null;
-
-  const cachedRaw = await env.CREDITS.get(cacheKey);
-  if (cachedRaw) {
-    try { transfers = JSON.parse(cachedRaw); } catch { transfers = null; }
-  }
-
-  if (!transfers) {
-    const resp = await fetch(`https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${env.HELIUS_API_KEY}&limit=20`);
-    if (!resp.ok) return null;
-    const txs = await resp.json();
-    if (!Array.isArray(txs)) return null;
-    transfers = txs.map((tx) => ({
-      sig: tx.signature,
-      nativeTransfers: (tx.nativeTransfers || []).map((t) => ({
-        to: t.toUserAccount,
-        amount: String(t.amount),
-      })),
-    }));
-    await env.CREDITS.put(cacheKey, JSON.stringify(transfers), {
-      expirationTtl: CHAIN_SCAN_CACHE_TTL,
-    }).catch(() => {});
-  }
-
-  const expected = BigInt(expectedRaw);
-  const tol = toleranceFor(expectedRaw);
-  const lo = expected - tol;
-  const hi = expected + tol;
-
-  for (const tx of transfers) {
-    for (const t of tx.nativeTransfers) {
-      if (t.to !== address) continue;
-      const v = BigInt(t.amount);
-      if (v >= lo && v <= hi) {
-        return { txHash: tx.sig, receivedRaw: t.amount };
-      }
-    }
-  }
-  return null;
-}
-
-export async function scanBitcoin(env, address, expectedRaw) {
-  const resp = await fetch(`https://mempool.space/api/address/${address}/txs`);
-  if (!resp.ok) return null;
-  const txs = await resp.json();
-  if (!Array.isArray(txs)) return null;
-
-  const expected = BigInt(expectedRaw);
-  const tol = toleranceFor(expectedRaw);
-  const lo = expected - tol;
-  const hi = expected + tol;
-
-  for (const tx of txs.slice(0, 20)) {
-    for (const vout of tx.vout || []) {
-      if (vout.scriptpubkey_address !== address) continue;
-      const v = BigInt(vout.value);
-      if (v >= lo && v <= hi) {
-        return { txHash: tx.txid, receivedRaw: String(vout.value) };
-      }
-    }
-  }
-  return null;
-}
-
-export async function scanTron(env, address, expectedRaw, token) {
-  const apiKey = env.TRONGRID_API_KEY;
-  if (!apiKey) return null;
-
-  const contractAddress = TOKEN_ADDRESSES.tron?.[token];
-  if (!contractAddress) return null;
-
-  const cacheKey = `tron:scan:${address}`;
-  let transfers = null;
-
-  const cachedRaw = await env.CREDITS.get(cacheKey);
-  if (cachedRaw) {
-    try { transfers = JSON.parse(cachedRaw); } catch { transfers = null; }
-  }
-
-  if (!transfers) {
-    const url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20`
-      + `?limit=30&contract_address=${contractAddress}`;
-    let resp;
-    try {
-      resp = await fetch(url, {
-        headers: { 'TRON-PRO-API-KEY': apiKey },
-      });
-    } catch {
-      return null;
-    }
-    if (!resp.ok) return null;
-    let body;
-    try { body = await resp.json(); } catch { return null; }
-    transfers = Array.isArray(body?.data) ? body.data : [];
-    await env.CREDITS.put(cacheKey, JSON.stringify(transfers), {
-      expirationTtl: CHAIN_SCAN_CACHE_TTL,
-    }).catch(() => {});
-  }
-
-  const expected = BigInt(expectedRaw);
-  const tol = toleranceFor(expectedRaw);
-  const lo = expected - tol;
-  const hi = expected + tol;
-
-  for (const t of transfers) {
-    if (t.token_address !== contractAddress) continue;
-    if (t.to !== address) continue;
-    if (t.type !== 'Transfer') continue;
-    const v = BigInt(t.value);
-    if (v >= lo && v <= hi) {
-      return { txHash: t.transaction_id, receivedRaw: String(v) };
-    }
-  }
-  return null;
-}
-
-// =====================================================================
-// FREE-CREDIT POOL
-// =====================================================================
-
-export async function readFreeCredits(env, clientId) {
-  const raw = await env.CREDITS.get(`free_credits:${clientId}`);
-  if (!raw) return null;
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch { return null; }
-  if (!parsed || typeof parsed.amount !== 'number' || parsed.amount <= 0) return null;
-  if (!parsed.expiresAt) return null;
-  const expiresMs = new Date(parsed.expiresAt).getTime();
-  if (!Number.isFinite(expiresMs)) return null;
-  if (Date.now() >= expiresMs) return null;
-  return parsed;
-}
-
-export async function writeFreeCredits(env, clientId, amount, grantedAtMs) {
-  if (amount <= 0) {
-    await env.CREDITS.delete(`free_credits:${clientId}`).catch(() => {});
-    return;
-  }
-  const grantedAt = new Date(grantedAtMs).toISOString();
-  const expiresAt = new Date(grantedAtMs + FREE_CLAIM_USE_WINDOW_MS).toISOString();
-  await env.CREDITS.put(`free_credits:${clientId}`, JSON.stringify({
-    amount, grantedAt, expiresAt,
-  }), { expirationTtl: FREE_CREDITS_TTL });
-}
-
-async function writeFreeCreditsWithExpiry(env, clientId, amount, grantedAt, expiresAt) {
-  if (amount <= 0) {
-    await env.CREDITS.delete(`free_credits:${clientId}`).catch(() => {});
-    return;
-  }
-  const expiresMs = new Date(expiresAt).getTime();
-  const remainingSec = Math.max(60, Math.ceil((expiresMs - Date.now()) / 1000) + 60);
-  await env.CREDITS.put(`free_credits:${clientId}`, JSON.stringify({
-    amount, grantedAt, expiresAt,
-  }), { expirationTtl: remainingSec });
-}
-
-export async function getEffectiveBalance(env, clientId) {
-  const [paidRaw, free] = await Promise.all([
-    env.CREDITS.get(`balance:${clientId}`),
-    readFreeCredits(env, clientId),
-  ]);
-  const paid = paidRaw ? parseInt(paidRaw, 10) : 0;
-  const freeAmount = free ? free.amount : 0;
-  return { paid, free: freeAmount, effective: paid + freeAmount, freeExpiresAt: free?.expiresAt || null };
-}
-
-// =====================================================================
-// CREDITS
-// =====================================================================
-
-export async function handleCreditsBalance(request, env, cors) {
-  const { clientId } = await request.json();
-  if (!clientId) return json({ error: 'clientId required' }, 400, cors);
-
-  const { paid, free, effective, freeExpiresAt } = await getEffectiveBalance(env, clientId);
-
-  return json({
-    clientId,
-    balance: effective,
-    paid,
-    free,
-    freeExpiresAt,
-  }, 200, cors);
-}
-
-export async function handleCreditsConsume(request, env, cors) {
-  const { clientId, reason, sweepId } = await request.json();
-  if (!clientId) return json({ error: 'clientId required' }, 400, cors);
-
-  if (sweepId && typeof sweepId === 'string' && sweepId.length >= 8) {
-    const idemKey = `consume:${sweepId}`;
-    const prior = await env.CREDITS.get(idemKey);
-    if (prior) {
-      try {
-        const parsed = JSON.parse(prior);
-        if (parsed.clientId === clientId) {
-          return json({
-            ok: true, consumed: 1, newBalance: parsed.newBalance,
-            pool: parsed.pool, alreadyConsumed: true,
-          }, 200, cors);
-        }
-      } catch {
-        // Corrupt record — treat as not-yet-consumed and overwrite below.
-      }
-    }
-  }
-
-  const free = await readFreeCredits(env, clientId);
-  const paidRaw = await env.CREDITS.get(`balance:${clientId}`);
-  const paid = paidRaw ? parseInt(paidRaw, 10) : 0;
-
-  const freeAmount = free ? free.amount : 0;
-  const effective = paid + freeAmount;
-  if (effective < 1) {
-    return json({ error: 'insufficient credits', balance: 0 }, 402, cors);
-  }
-
-  let pool;
-  let newEffective;
-
-  if (freeAmount > 0) {
-    pool = 'free';
-    const remaining = freeAmount - 1;
-    await writeFreeCreditsWithExpiry(env, clientId, remaining, free.grantedAt, free.expiresAt);
-    newEffective = paid + remaining;
-  } else {
-    pool = 'paid';
-    newEffective = paid - 1;
-    await env.CREDITS.put(`balance:${clientId}`, String(newEffective));
-  }
-
-  const historyRaw = await env.CREDITS.get(`history:${clientId}`);
-  const history = historyRaw ? JSON.parse(historyRaw) : [];
-  history.unshift({
-    delta: -1,
-    balance: newEffective,
-    at: new Date().toISOString(),
-    type: 'consume',
-    reason: reason || 'sweep',
-    pool,
-  });
-  await env.CREDITS.put(`history:${clientId}`, JSON.stringify(history.slice(0, 50)));
-
-  if (sweepId && typeof sweepId === 'string' && sweepId.length >= 8) {
-    await env.CREDITS.put(`consume:${sweepId}`, JSON.stringify({
-      clientId, newBalance: newEffective, pool, consumedAt: new Date().toISOString(),
-    }), { expirationTtl: CONSUME_IDEM_TTL });
-  }
-
-  return json({ ok: true, consumed: 1, newBalance: newEffective, pool }, 200, cors);
-}
-
-export async function getBalance(env, clientId) {
-  const raw = await env.CREDITS.get(`balance:${clientId}`);
-  return raw ? parseInt(raw, 10) : 0;
-}
-
-export async function addCredits(env, clientId, delta, metadata = {}) {
-  const current = await getBalance(env, clientId);
-  const next = current + delta;
-  await env.CREDITS.put(`balance:${clientId}`, next.toString());
-  const historyRaw = await env.CREDITS.get(`history:${clientId}`);
-  const history = historyRaw ? JSON.parse(historyRaw) : [];
-  history.unshift({ delta, balance: next, at: new Date().toISOString(), ...metadata });
-  await env.CREDITS.put(`history:${clientId}`, JSON.stringify(history.slice(0, 50)));
-  return next;
-}
-
-// =====================================================================
-// FREE CREDITS — CLAIM WINDOW
-// =====================================================================
-
-export async function handleClaimInfo(request, env, cors) {
-  const { clientId } = await request.json();
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const startKey = `free_claim:start:${clientId}`;
-  const grantedKey = `free_claim:granted:${clientId}`;
-  const ipKey = `free_claim:ip:${ip}`;
-
-  const [startRaw, grantedRaw, ipClaimsRaw, free] = await Promise.all([
-    env.CREDITS.get(startKey),
-    env.CREDITS.get(grantedKey),
-    env.CREDITS.get(ipKey),
-    readFreeCredits(env, clientId),
-  ]);
-
-  const now = Date.now();
-  const ipClaims = ipClaimsRaw ? parseInt(ipClaimsRaw, 10) : 0;
-
-  const freeAmount = free ? free.amount : 0;
-  const useExpiresAt = free?.expiresAt || null;
-  let useMsRemaining = 0;
-  if (useExpiresAt) {
-    const ms = new Date(useExpiresAt).getTime();
-    useMsRemaining = Number.isFinite(ms) ? Math.max(0, ms - now) : 0;
-  }
-
-  // A client that has already claimed is never "blocked" — it's done.
-  // Reporting the raw IP-quota state here would be misleading, because
-  // the client's own request would not be blocked by it.
-  if (grantedRaw) {
-    const startMs = startRaw ? new Date(startRaw).getTime() : null;
-    return json({
-      ok: true, claimed: true, expired: false, blockedByIp: false, notStarted: false,
-      windowStart: startRaw || null,
-      windowEnd: startMs ? new Date(startMs + FREE_CLAIM_WINDOW_MS).toISOString() : null,
-      msRemaining: 0, creditsGranted: FREE_CLAIM_CREDITS,
-      ipClaims, ipMax: FREE_CLAIM_IP_MAX,
-      freeAmount, useExpiresAt, useMsRemaining,
-    }, 200, cors);
-  }
-
-  // For a client that has NOT yet claimed, the IP quota is meaningful:
-  // it predicts whether their next claim would be blocked.
-  const blockedByIp = ipClaims >= FREE_CLAIM_IP_MAX;
-
-  if (!startRaw) {
-    return json({
-      ok: true, claimed: false, expired: false, blockedByIp, notStarted: true,
-      windowStart: null, windowEnd: null,
-      msRemaining: FREE_CLAIM_WINDOW_MS, creditsGranted: 0,
-      ipClaims, ipMax: FREE_CLAIM_IP_MAX,
-      freeAmount, useExpiresAt, useMsRemaining,
-    }, 200, cors);
-  }
-
-  const windowStart = new Date(startRaw).getTime();
-  const windowEnd = windowStart + FREE_CLAIM_WINDOW_MS;
-  const msRemaining = Math.max(0, windowEnd - now);
-
-  return json({
-    ok: true, claimed: false, expired: msRemaining === 0, blockedByIp, notStarted: false,
-    windowStart: new Date(windowStart).toISOString(),
-    windowEnd: new Date(windowEnd).toISOString(),
-    msRemaining, creditsGranted: 0,
-    ipClaims, ipMax: FREE_CLAIM_IP_MAX,
-    freeAmount, useExpiresAt, useMsRemaining,
-  }, 200, cors);
-}
-
-/**
- * Grant free credits to a client, subject to three independent caps:
- *
- *   1. Per-clientId: once only. Enforced by free_claim:granted:{clientId}.
- *   2. Per-IP:       FREE_CLAIM_IP_MAX per 7 days.
- *   3. Per-fingerprint: FREE_CLAIM_FINGERPRINT_MAX per 7 days.
- *
- * The IP and fingerprint counters are incremented with a KV
- * read-modify-write, which is NOT atomic. Two concurrent requests from
- * the same IP can both read `n` and both write `n+1`, netting only one
- * increment. This is acceptable: the caps are soft limits intended to
- * blunt trivial farming, not to enforce a hard quota. Do not rely on
- * them for billing or security decisions. Making them hard would
- * require a Durable Object.
- *
- * On any failure path — window expired, exception during the grant —
- * the counters are decremented back via `releaseSlots`. There is a
- * narrow window between the increment and the release where a crash
- * would leave the counter permanently incremented. The window is one
- * KV round-trip, and the impact is +1 on a soft cap. Not corrected.
- */
-export async function handleClaimFree(request, env, cors) {
-  const { clientId, fingerprint } = await request.json();
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-
-  const fp = (typeof fingerprint === 'string' && fingerprint.length > 0)
-    ? fingerprint.slice(0, 64)
-    : '';
-
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const now = Date.now();
-
-  const startKey = `free_claim:start:${clientId}`;
-  const grantedKey = `free_claim:granted:${clientId}`;
-  const ipKey = `free_claim:ip:${ip}`;
-  const fpKey = `free_claim:fp:${fp}`;
-
-  // ---- Fast path: already claimed ----
-  const grantedRaw = await env.CREDITS.get(grantedKey);
-  if (grantedRaw) {
-    const { effective } = await getEffectiveBalance(env, clientId);
-    return json({
-      ok: true, alreadyClaimed: true, creditsGranted: 0,
-      newBalance: effective,
-    }, 200, cors);
-  }
-
-  // ---- Check IP cap ----
-  const ipClaimsRaw = await env.CREDITS.get(ipKey);
-  const ipClaims = ipClaimsRaw ? parseInt(ipClaimsRaw, 10) : 0;
-  if (ipClaims >= FREE_CLAIM_IP_MAX) {
-    const { effective } = await getEffectiveBalance(env, clientId);
-    return json({
-      ok: true, blockedByIp: true, creditsGranted: 0,
-      ipClaims, ipMax: FREE_CLAIM_IP_MAX,
-      newBalance: effective,
-    }, 200, cors);
-  }
-
-  // ---- Check fingerprint cap ----
-  const fpClaimsRaw = await env.CREDITS.get(fpKey);
-  const fpClaims = fpClaimsRaw ? parseInt(fpClaimsRaw, 10) : 0;
-  if (fpClaims >= FREE_CLAIM_FINGERPRINT_MAX) {
-    const { effective } = await getEffectiveBalance(env, clientId);
-    return json({
-      ok: true, blockedByFingerprint: true, creditsGranted: 0,
-      fpClaims, fpMax: FREE_CLAIM_FINGERPRINT_MAX,
-      newBalance: effective,
-    }, 200, cors);
-  }
-
-  // ---- Reserve both slots ----
-  // Not atomic. See the doc comment above for why that's acceptable.
-  await env.CREDITS.put(ipKey, String(ipClaims + 1), {
-    expirationTtl: FREE_CLAIM_IP_TTL,
-  });
-  await env.CREDITS.put(fpKey, String(fpClaims + 1), {
-    expirationTtl: FREE_CLAIM_FINGERPRINT_TTL,
-  });
-
-  const releaseSlots = async () => {
-    await env.CREDITS.put(ipKey, String(ipClaims), {
-      expirationTtl: FREE_CLAIM_IP_TTL,
-    }).catch(() => {});
-    await env.CREDITS.put(fpKey, String(fpClaims), {
-      expirationTtl: FREE_CLAIM_FINGERPRINT_TTL,
-    }).catch(() => {});
-  };
-
-  // ---- Window check ----
-  const startRaw = await env.CREDITS.get(startKey);
-  if (startRaw) {
-    const windowStart = new Date(startRaw).getTime();
-    if (now - windowStart > FREE_CLAIM_WINDOW_MS) {
-      await releaseSlots();
-      const { effective } = await getEffectiveBalance(env, clientId);
-      return json({
-        ok: true, offerExpired: true, creditsGranted: 0,
-        newBalance: effective,
-      }, 200, cors);
-    }
-  } else {
-    await env.CREDITS.put(startKey, new Date(now).toISOString(), {
-      expirationTtl: FREE_CLAIM_START_TTL,
-    });
-  }
-
-  // ---- Grant ----
-  const grantedAtMs = now;
-  const preGrant = await getEffectiveBalance(env, clientId);
-
-  // The grant and the metadata write are in the same try block, so a
-  // failure in either releases the slots and returns no partial state.
-  // In particular: if writeFreeCredits succeeds but the metadata write
-  // fails, we want the whole thing to look like it didn't happen.
-  try {
-    await writeFreeCredits(env, clientId, FREE_CLAIM_CREDITS, grantedAtMs);
-
-    const historyRaw = await env.CREDITS.get(`history:${clientId}`);
-    const history = historyRaw ? JSON.parse(historyRaw) : [];
-    history.unshift({
-      delta: FREE_CLAIM_CREDITS,
-      balance: preGrant.effective + FREE_CLAIM_CREDITS,
-      at: new Date(grantedAtMs).toISOString(),
-      type: 'free_claim',
-      source: 'launch_bonus',
-      credits: FREE_CLAIM_CREDITS,
-      ip,
-      fingerprint: fp,
-      expiresAt: new Date(grantedAtMs + FREE_CLAIM_USE_WINDOW_MS).toISOString(),
-    });
-    await env.CREDITS.put(`history:${clientId}`, JSON.stringify(history.slice(0, 50)));
-
-    await env.CREDITS.put(`client_meta:${clientId}`, JSON.stringify({
-      fingerprint: fp || null,
-      ip,
-      host: request.headers.get('host') || 'unknown',
-      firstSeen: new Date(now).toISOString(),
-    }), { expirationTtl: 60 * 60 * 24 * 365 });
-  } catch (e) {
-    await releaseSlots();
-    throw e;
-  }
-
-  await env.CREDITS.put(grantedKey, new Date().toISOString(), {
-    expirationTtl: FREE_CLAIM_GRANTED_TTL,
-  });
-
-  return json({
-    ok: true, creditsGranted: FREE_CLAIM_CREDITS,
-    newBalance: preGrant.effective + FREE_CLAIM_CREDITS,
-    freeAmount: FREE_CLAIM_CREDITS,
-    useExpiresAt: new Date(grantedAtMs + FREE_CLAIM_USE_WINDOW_MS).toISOString(),
-    useMsRemaining: FREE_CLAIM_USE_WINDOW_MS,
-    windowEnd: new Date(now + FREE_CLAIM_WINDOW_MS).toISOString(),
-    ipClaims: ipClaims + 1, ipMax: FREE_CLAIM_IP_MAX,
-    fpClaims: fpClaims + 1, fpMax: FREE_CLAIM_FINGERPRINT_MAX,
-  }, 200, cors);
-}
 
 // =====================================================================
 // GAS SPONSORSHIP
@@ -1181,123 +263,6 @@ export async function checkSponsorRate(env, ip) {
 }
 
 // =====================================================================
-// SWEEP COMMIT
-// =====================================================================
-
-export async function handleSweepCommit(request, env, cors) {
-  const { clientId, sweepId, userDestination } = await request.json();
-
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-  if (!sweepId || typeof sweepId !== 'string' || sweepId.length < 8) {
-    return json({ error: 'sweepId required (min 8 chars)' }, 400, cors);
-  }
-  if (!userDestination || typeof userDestination !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(userDestination)) {
-    return json({ error: 'userDestination must be a 0x address' }, 400, cors);
-  }
-
-  const key = `sweep:${sweepId}`;
-  const existing = await env.CREDITS.get(key);
-  if (existing) {
-    const parsed = JSON.parse(existing);
-    if (parsed.clientId !== clientId) {
-      return json({ error: 'sweep already committed by a different client' }, 409, cors);
-    }
-    if (parsed.userDestination.toLowerCase() !== userDestination.toLowerCase()) {
-      return json({ error: 'sweep already committed with a different destination' }, 409, cors);
-    }
-    return json({ ok: true, alreadyCommitted: true }, 200, cors);
-  }
-
-  await env.CREDITS.put(key, JSON.stringify({
-    clientId,
-    userDestination,
-    committedAt: new Date().toISOString(),
-  }), { expirationTtl: SWEEP_COMMIT_TTL });
-
-  return json({ ok: true }, 200, cors);
-}
-
-// =====================================================================
-// SWEEP DESTINATION — LATE UPDATE
-// =====================================================================
-//
-// The client commits a sweep with FEE_WALLET_EVM as a placeholder
-// destination when the user hasn't entered one yet. After the sweep
-// completes, the user is prompted for a real destination. This
-// endpoint updates the commit and the pending fee record.
-//
-// Constraints:
-//   - The commit must exist and belong to the calling client
-//   - The new destination must be a valid 0x address
-//   - The sweep must still be pending — once forwarded, the
-//     destination is frozen (the operator may have already sent funds)
-// =====================================================================
-
-export async function handleSweepDestination(request, env, cors) {
-  const { clientId, sweepId, userDestination } = await request.json();
-
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-  if (!sweepId || typeof sweepId !== 'string' || sweepId.length < 8) {
-    return json({ error: 'sweepId required (min 8 chars)' }, 400, cors);
-  }
-  if (!userDestination || typeof userDestination !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(userDestination)) {
-    return json({ error: 'userDestination must be a 0x address' }, 400, cors);
-  }
-
-  const commitRaw = await env.CREDITS.get(`sweep:${sweepId}`);
-  if (!commitRaw) {
-    return json({ error: 'sweep not found — commit not recorded' }, 404, cors);
-  }
-  let commit;
-  try { commit = JSON.parse(commitRaw); }
-  catch { return json({ error: 'sweep commit is corrupt' }, 500, cors); }
-  if (commit.clientId !== clientId) {
-    return json({ error: 'sweep belongs to a different client' }, 403, cors);
-  }
-
-  commit.userDestination = userDestination;
-  commit.destinationUpdatedAt = new Date().toISOString();
-  await env.CREDITS.put(`sweep:${sweepId}`, JSON.stringify(commit), {
-    expirationTtl: SWEEP_COMMIT_TTL,
-  });
-
-  const feeRaw = await env.CREDITS.get(`fee:sweep:${sweepId}`);
-  let feeUpdated = false;
-  if (feeRaw) {
-    let record;
-    try { record = JSON.parse(feeRaw); }
-    catch { return json({ error: 'fee record is corrupt' }, 500, cors); }
-
-    if (record.status === 'forwarded') {
-      return json({
-        error: 'sweep already forwarded — destination cannot be changed',
-        status: 'forwarded',
-      }, 409, cors);
-    }
-
-    for (const r of record.receipts || []) {
-      r.userDestination = userDestination;
-    }
-    record.operatorView = buildOperatorView(record.receipts || [], record.gasSponsorships || []);
-    record.destinationUpdatedAt = new Date().toISOString();
-
-    await env.CREDITS.put(`fee:sweep:${sweepId}`, JSON.stringify(record));
-    feeUpdated = true;
-  }
-
-  return json({
-    ok: true,
-    sweepId,
-    userDestination,
-    feeRecordUpdated: feeUpdated,
-  }, 200, cors);
-}
-
-// =====================================================================
 // FEE RECORDING
 // =====================================================================
 
@@ -1326,18 +291,6 @@ export async function handleFeeRecord(request, env, cors) {
     return json({ ok: true, sweepId, alreadyRecorded: true, status: 'pending' }, 200, cors);
   }
 
-  const commitRaw = await env.CREDITS.get(`sweep:${sweepId}`);
-  if (!commitRaw) {
-    return json({ error: 'sweepId not committed — call /sweep/commit before sweeping' }, 400, cors);
-  }
-  let commit;
-  try { commit = JSON.parse(commitRaw); }
-  catch { return json({ error: 'sweep commit is corrupt' }, 500, cors); }
-  if (commit.clientId !== clientId) {
-    return json({ error: 'sweepId belongs to a different client' }, 403, cors);
-  }
-  const authoritativeDestination = commit.userDestination;
-
   for (let i = 0; i < receipts.length; i++) {
     const r = receipts[i];
     if (!r || typeof r !== 'object') {
@@ -1349,32 +302,15 @@ export async function handleFeeRecord(request, env, cors) {
     if (typeof r.amountRaw !== 'string' || !/^\d+$/.test(r.amountRaw)) {
       return json({ error: `receipt[${i}].amountRaw must be a decimal string` }, 400, cors);
     }
-    if (typeof r.userShareRaw !== 'string' || !/^\d+$/.test(r.userShareRaw)) {
-      return json({ error: `receipt[${i}].userShareRaw must be a decimal string` }, 400, cors);
-    }
-    if (typeof r.operatorFeeRaw !== 'string' || !/^\d+$/.test(r.operatorFeeRaw)) {
-      return json({ error: `receipt[${i}].operatorFeeRaw must be a decimal string` }, 400, cors);
-    }
     if (typeof r.decimals !== 'number' || r.decimals < 0 || r.decimals > 30) {
       return json({ error: `receipt[${i}].decimals must be 0-30` }, 400, cors);
     }
-    if (typeof r.recipient !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(r.recipient)) {
+    if (typeof r.recipient !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(r.recipient) && r.family === 'evm') {
       return json({ error: `receipt[${i}].recipient must be a 0x address` }, 400, cors);
     }
     if (typeof r.userDestination !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(r.userDestination)) {
       return json({ error: `receipt[${i}].userDestination must be a 0x address` }, 400, cors);
     }
-
-    if (r.userDestination.toLowerCase() !== authoritativeDestination.toLowerCase()) {
-      console.warn('Destination mismatch on fee record', {
-        sweepId,
-        clientId,
-        clientSent: r.userDestination,
-        committed: authoritativeDestination,
-      });
-    }
-
-    r.userDestination = authoritativeDestination;
   }
 
   const operatorView = buildOperatorView(receipts, gasSponsorships);
@@ -1410,48 +346,47 @@ export function scaleUsdcToDecimals(amount6, targetDecimals) {
 
 export function buildOperatorView(receipts, gasSponsorships) {
   const lines = [];
-  lines.push('MANUAL FORWARD REQUIRED');
+  lines.push('SWEEP RECEIPT');
   lines.push('═'.repeat(60));
-  lines.push('Swept value has landed in the fee wallet. Send 90% (minus');
-  lines.push('any sponsorship fees) to the user and keep the rest.');
+  lines.push('Fee already collected on-chain by the swap routing protocols.');
+  lines.push('Forward each user destination their share, minus any gas');
+  lines.push('sponsorship fee, and keep the rest.');
   lines.push('');
 
   for (const r of receipts) {
     const chainLabel = r.family === 'evm' ? `EVM ${r.chain}` : r.family;
     const received = BigInt(r.amountRaw);
-    const userAmount = BigInt(r.userShareRaw || '0');
     const est = r.estimated ? ' (est.)' : '';
     const isPlaceholder = r.userDestination?.toLowerCase() === FEE_WALLET_EVM.toLowerCase();
 
     let sponsorFee = 0n;
     if (r.family === 'evm') {
       for (const gs of gasSponsorships) {
-        if (gs.chain === r.chain) {
+        if (gs.chain === r.chain && gs.sponsorshipFeeUsdcRaw) {
           sponsorFee += scaleUsdcToDecimals(gs.sponsorshipFeeUsdcRaw, r.decimals);
         }
       }
     }
 
-    const netUserAmount = userAmount > sponsorFee ? userAmount - sponsorFee : 0n;
+    // User share is 90% of what landed in the fee wallet. Sponsorship
+    // fee (if any) is deducted from that 90% before forwarding.
+    const userShare = (received * 90n) / 100n;
+    const netUserShare = userShare > sponsorFee ? userShare - sponsorFee : 0n;
 
     lines.push(`[${chainLabel}]`);
     lines.push(`  Fee wallet:        ${r.recipient}`);
-    lines.push(`  ${r.symbol} received:  ${formatAmount(received, r.decimals)}${est}`);
-    lines.push(`  90% share:         ${formatAmount(userAmount, r.decimals)} ${r.symbol}${est}`);
+    lines.push(`  Received:          ${formatAmount(received, r.decimals)} ${r.symbol}${est}`);
+    lines.push(`  90% share:         ${formatAmount(userShare, r.decimals)} ${r.symbol}`);
     if (sponsorFee > 0n) {
       lines.push(`  Sponsorship fee:  -${formatAmount(sponsorFee, r.decimals)} ${r.symbol}`);
     }
 
     if (isPlaceholder) {
       lines.push(`  Send to user:      ** HOLD — user has not provided a destination **`);
-      lines.push(`  Keep as fee:       ${formatAmount(received - userAmount + sponsorFee, r.decimals)} ${r.symbol}`);
-      lines.push(`  NOTE:              Destination is the fee wallet placeholder. Wait for the`);
-      lines.push(`                     user to enter a real destination via the app, then`);
-      lines.push(`                     re-check this record before forwarding.`);
     } else {
-      lines.push(`  Send to user:      ${formatAmount(netUserAmount, r.decimals)} ${r.symbol} on ${chainLabel} → ${r.userDestination}`);
-      lines.push(`  Keep as fee:       ${formatAmount(received - netUserAmount, r.decimals)} ${r.symbol}`);
+      lines.push(`  Send to user:      ${formatAmount(netUserShare, r.decimals)} ${r.symbol} on ${chainLabel} → ${r.userDestination}`);
     }
+    lines.push(`  Keep as fee:       ${formatAmount(received - netUserShare, r.decimals)} ${r.symbol}`);
 
     if (r.estimated) {
       lines.push(`  NOTE:              Verify against ${r.bridge} settlement before forwarding.`);
@@ -1576,283 +511,6 @@ function requireOperator(request, env) {
 }
 
 // =====================================================================
-// ADMIN
-// =====================================================================
-
-async function checkAdminAuthFailRate(env, ip) {
-  const key = `admin:authfail:${ip}`;
-  const raw = await env.CREDITS.get(key);
-  const now = Date.now();
-
-  if (!raw) return { ok: true, count: 0 };
-
-  try {
-    const entry = JSON.parse(raw);
-    if (now > entry.reset) {
-      await env.CREDITS.delete(key).catch(() => {});
-      return { ok: true, count: 0 };
-    }
-    if (entry.count >= ADMIN_AUTH_FAIL_MAX) {
-      return { ok: false, count: entry.count, reset: entry.reset };
-    }
-    return { ok: true, count: entry.count };
-  } catch {
-    return { ok: true, count: 0 };
-  }
-}
-
-async function recordAdminAuthFail(env, ip) {
-  const key = `admin:authfail:${ip}`;
-  const raw = await env.CREDITS.get(key);
-  const now = Date.now();
-
-  let entry;
-  if (!raw) {
-    entry = { count: 1, reset: now + ADMIN_AUTH_FAIL_WINDOW_MS };
-  } else {
-    try {
-      entry = JSON.parse(raw);
-      if (now > entry.reset) {
-        entry = { count: 1, reset: now + ADMIN_AUTH_FAIL_WINDOW_MS };
-      } else {
-        entry.count += 1;
-      }
-    } catch {
-      entry = { count: 1, reset: now + ADMIN_AUTH_FAIL_WINDOW_MS };
-    }
-  }
-
-  await env.CREDITS.put(key, JSON.stringify(entry), {
-    expirationTtl: Math.ceil((entry.reset - now) / 1000) + 1,
-  }).catch(() => {});
-}
-
-async function checkAdminCallRate(env, ip) {
-  const key = `admin:rl:${ip}`;
-  const raw = await env.CREDITS.get(key);
-  const now = Date.now();
-
-  if (!raw) {
-    await env.CREDITS.put(key, JSON.stringify({ count: 1, reset: now + ADMIN_RATE_WINDOW_MS }), {
-      expirationTtl: Math.ceil(ADMIN_RATE_WINDOW_MS / 1000),
-    });
-    return true;
-  }
-
-  try {
-    const entry = JSON.parse(raw);
-    if (now > entry.reset) {
-      await env.CREDITS.put(key, JSON.stringify({ count: 1, reset: now + ADMIN_RATE_WINDOW_MS }), {
-        expirationTtl: Math.ceil(ADMIN_RATE_WINDOW_MS / 1000),
-      });
-      return true;
-    }
-    if (entry.count >= ADMIN_CALL_MAX) return false;
-    entry.count += 1;
-    await env.CREDITS.put(key, JSON.stringify(entry), {
-      expirationTtl: Math.ceil((entry.reset - now) / 1000),
-    });
-    return true;
-  } catch {
-    return true;
-  }
-}
-
-async function requireAdmin(request, env, ip) {
-  const callOk = await checkAdminCallRate(env, ip);
-  if (!callOk) {
-    const err = new Error('rate limited');
-    err.status = 429;
-    throw err;
-  }
-
-  const failCheck = await checkAdminAuthFailRate(env, ip);
-  if (!failCheck.ok) {
-    const err = new Error('too many failed auth attempts');
-    err.status = 429;
-    throw err;
-  }
-
-  const provided = request.headers.get('X-Operator-Secret') || '';
-  const expected = env.OPERATOR_SECRET || '';
-  if (!expected) {
-    const err = new Error('OPERATOR_SECRET not configured');
-    err.status = 500;
-    throw err;
-  }
-  if (provided !== expected) {
-    await recordAdminAuthFail(env, ip);
-    const err = new Error('unauthorized');
-    err.status = 401;
-    throw err;
-  }
-}
-
-export async function handleAdminCreditsGrant(request, env, cors) {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  await requireAdmin(request, env, ip);
-
-  const body = await request.json();
-  const { clientId, amount, reason, note } = body || {};
-
-  if (!clientId || typeof clientId !== 'string' || clientId.length < 16) {
-    return json({ error: 'clientId required (min 16 chars)' }, 400, cors);
-  }
-  if (typeof amount !== 'number' || !Number.isInteger(amount) || amount === 0) {
-    return json({ error: 'amount must be a non-zero integer' }, 400, cors);
-  }
-  if (Math.abs(amount) > 100000) {
-    return json({ error: 'amount exceeds sanity cap (100000)' }, 400, cors);
-  }
-
-  const newBalance = await addCredits(env, clientId, amount, {
-    type: 'admin_grant',
-    reason: reason || 'manual',
-    note: note || null,
-    ip,
-  });
-
-  return json({
-    ok: true,
-    clientId,
-    amount,
-    newBalance,
-    grantedAt: new Date().toISOString(),
-  }, 200, cors);
-}
-
-export async function handleAdminCreditsLookup(request, env, cors) {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  await requireAdmin(request, env, ip);
-
-  const body = await request.json();
-  const { clientId } = body || {};
-
-  if (!clientId || typeof clientId !== 'string') {
-    return json({ error: 'clientId required' }, 400, cors);
-  }
-
-  const { paid, free, effective } = await getEffectiveBalance(env, clientId);
-  const balance = effective;
-  const historyRaw = await env.CREDITS.get(`history:${clientId}`);
-  let history = [];
-  try { history = historyRaw ? JSON.parse(historyRaw) : []; } catch { history = []; }
-
-  return json({ ok: true, clientId, balance, paid, free, history }, 200, cors);
-}
-
-export async function handleAdminCreditsList(request, env, cors) {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  await requireAdmin(request, env, ip);
-
-  const url = new URL(request.url);
-  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
-
-  const listed = await env.CREDITS.list({ prefix: 'balance:', limit });
-
-  const items = [];
-  for (const key of listed.keys) {
-    const clientId = key.name.slice('balance:'.length);
-    const raw = await env.CREDITS.get(key.name);
-    const paid = raw ? parseInt(raw, 10) : 0;
-
-    const free = await readFreeCredits(env, clientId);
-    const freeAmount = free ? free.amount : 0;
-    const balance = paid + freeAmount;
-
-    const metaRaw = await env.CREDITS.get(`client_meta:${clientId}`);
-    let meta = { fingerprint: null, ip: null, host: null, firstSeen: null };
-    if (metaRaw) {
-      try {
-        const parsed = JSON.parse(metaRaw);
-        meta = {
-          fingerprint: parsed.fingerprint || null,
-          ip: parsed.ip || null,
-          host: parsed.host || null,
-          firstSeen: parsed.firstSeen || null,
-        };
-      } catch { /* leave defaults */ }
-    }
-
-    items.push({ clientId, balance, paid, free: freeAmount, ...meta });
-  }
-
-  return json({
-    ok: true,
-    count: items.length,
-    cursor: listed.cursor || null,
-    list_complete: listed.list_complete ?? true,
-    items,
-  }, 200, cors);
-}
-
-/**
- * Find every client whose client_meta record has a matching fingerprint.
- *
- * Cloudflare KV's list() returns at most 1000 keys per call. We page
- * through the cursor until list_complete is true, with a hard cap of
- * 10 pages (10,000 keys) so a runaway list cannot hang the worker. If
- * the cap is hit, the response carries `truncated: true` so the
- * operator knows the result may be incomplete.
- *
- * At ~10k clients this starts to be slow (one KV get per key). If it
- * becomes a problem, add a reverse index: at claim time, push the
- * clientId onto `fp_index:{fingerprint}`. Lookups become a single read.
- */
-export async function handleAdminClientLookupByFingerprint(request, env, cors) {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  await requireAdmin(request, env, ip);
-
-  const body = await request.json();
-  const { fingerprint } = body || {};
-  if (!fingerprint || typeof fingerprint !== 'string') {
-    return json({ error: 'fingerprint required' }, 400, cors);
-  }
-
-  const MAX_PAGES = 10;
-  const PAGE_SIZE = 1000;
-
-  const matches = [];
-  let cursor = undefined;
-  let pages = 0;
-
-  while (pages < MAX_PAGES) {
-    const listed = await env.CREDITS.list({
-      prefix: 'client_meta:',
-      limit: PAGE_SIZE,
-      cursor,
-    });
-
-    for (const key of listed.keys) {
-      const clientId = key.name.slice('client_meta:'.length);
-      const raw = await env.CREDITS.get(key.name);
-      if (!raw) continue;
-      let meta;
-      try { meta = JSON.parse(raw); } catch { continue; }
-      if (meta.fingerprint === fingerprint) {
-        const { effective } = await getEffectiveBalance(env, clientId);
-        matches.push({ clientId, balance: effective, ...meta });
-      }
-    }
-
-    pages++;
-    if (listed.list_complete) break;
-    cursor = listed.cursor;
-    if (!cursor) break;  // Defensive: list_complete false with no cursor.
-  }
-
-  const truncated = pages >= MAX_PAGES && !!cursor;
-
-  return json({
-    ok: true,
-    fingerprint,
-    count: matches.length,
-    truncated,
-    matches,
-  }, 200, cors);
-}
-
-// =====================================================================
 // HELPERS
 // =====================================================================
 
@@ -1862,34 +520,3 @@ export function json(data, status = 200, cors = { 'Access-Control-Allow-Origin':
     headers: { 'Content-Type': 'application/json', ...cors },
   });
 }
-
-export {
-  BUNDLES,
-  CHAIN_IDS,
-  TOKEN_ADDRESSES,
-  METHODS,
-  FEE_WALLET_EVM,
-  SPONSOR_RPC,
-  SPONSOR_TARGET_WEI,
-  SPONSOR_MAX_WEI,
-  SPONSOR_RATE_MAX,
-  SPONSOR_RATE_WINDOW_MS,
-  SPONSOR_IDEM_TTL,
-  CONSUME_IDEM_TTL,
-  CRYPTO_VERIFY_LOCK_TTL,
-  PENDING_PAYMENT_TTL,
-  NO_MATCH_CACHE_TTL,
-  CHAIN_SCAN_CACHE_TTL,
-  FREE_CLAIM_CREDITS,
-  FREE_CLAIM_WINDOW_MS,
-  FREE_CLAIM_USE_WINDOW_MS,
-  FREE_CLAIM_IP_MAX,
-  FREE_CLAIM_FINGERPRINT_MAX,
-  FREE_CLAIM_FINGERPRINT_TTL,
-  FREE_CREDITS_TTL,
-  SWEEP_COMMIT_TTL,
-  ADMIN_AUTH_FAIL_MAX,
-  ADMIN_AUTH_FAIL_WINDOW_MS,
-  ADMIN_CALL_MAX,
-  ADMIN_RATE_WINDOW_MS,
-};

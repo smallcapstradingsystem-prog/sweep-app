@@ -21,8 +21,6 @@
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
-                <button id="buy-credits-button" class="btn btn-secondary btn-sm">Buy credits</button>
-                <span id="credits-badge" class="credits-badge credits-empty">No credits</span>
             </div>
         </div>
     </nav>
@@ -31,11 +29,9 @@
         <h1 style="margin-bottom: 8px;">Launch App</h1>
         <p class="hint" style="margin-bottom: 32px;">
             Everything runs in your browser. No server sees your keys.
-            <strong>Dry runs are free</strong> — credits are only used on live sweeps.
+            <strong>Dry runs are free</strong> and always available.
             First time here? <a href="/guide.html">Read the guide →</a>
         </p>
-
-        <div id="free-claim-banner" class="free-claim-banner" style="display:none;"></div>
 
         <!-- TONIGHT: softened security claim. The old text said "runs entirely
              in your browser" which is not literally true — the app makes
@@ -162,7 +158,7 @@
             <h2 style="margin-top:32px;">4. Mode</h2>
             <div class="checks">
                 <label><input type="radio" name="mode" value="dry-run" checked> Dry run (free, nothing broadcast)</label>
-                <label><input type="radio" name="mode" value="live"> Live (uses 1 credit, broadcasts real transactions)</label>
+                <label><input type="radio" name="mode" value="live"> Live (broadcasts real transactions)</label>
             </div>
 
             <div class="actions">
@@ -198,19 +194,19 @@
             <div class="footer-bottom">
                 <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
                 <p style="font-size: 11px; color: #8b949e; margin-top: 12px;">
-                    Built 2026-09-20T05:22:56.374Z · bundle cf365e87d90d231d14a31464fa5580fb7a9977fb061d61955c145766d68ba2cc · 5445.8 KB
+                    Built 2026-09-20T05:52:59.542Z · bundle e6178dfb3cc68e6017ed14f021786113549a528fbe3df62259c76020fe959313 · 5431.3 KB
                 </p>
             </div>
         </div>
     </footer>
 
     <script>
-        window.__POOLPORT_LIQUIFI_RELEASE__ = "cf365e87d90d231d14a31464fa5580fb7a9977fb061d61955c145766d68ba2cc".slice(0, 12);
+        window.__POOLPORT_LIQUIFI_RELEASE__ = "e6178dfb3cc68e6017ed14f021786113549a528fbe3df62259c76020fe959313".slice(0, 12);
     </script>
     <!-- TONIGHT: removed crossorigin="anonymous". The attribute is meant for
          cross-origin scripts and forces a CORS preflight on same-origin fetches,
          which browsers handle inconsistently. Since app.js is same-origin,
          integrity works without it. -->
-    <script src="app.js" integrity="sha384-b+S1aHwtMUH66ilcljFhOyb0Njm7IcwJFG6VbndZjsfE7YLdbF4IhAegRvdRSJMD"></script>
+    <script src="app.js" integrity="sha384-YSRk6q7yOWdjyzhMOoHF55PuJhvBOj/MpYqbrkzo9bxFyRzeJH6M7r6rTBW/9RRW"></script>
 </body>
 </html>

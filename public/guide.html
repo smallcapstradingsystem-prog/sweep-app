@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Guide — How to use PoolPort LiquiFi</title>
-    <meta name="description" content="Step-by-step guide to using PoolPort LiquiFi: pick a wallet source, preview balances, buy credits, and sweep your wallets into USDC.">
+    <meta name="description" content="Step-by-step guide to using PoolPort LiquiFi: pick a wallet source, preview balances, set a destination, and sweep your wallets into USDC.">
     <meta name="theme-color" content="#0a0e1a">
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
@@ -163,7 +163,6 @@
                 <li><a href="#destination">Setting a destination</a></li>
                 <li><a href="#chains">Selecting chains and families</a></li>
                 <li><a href="#preview">Running a preview</a></li>
-                <li><a href="#credit">Buying credits</a></li>
                 <li><a href="#live">Running a live sweep</a></li>
                 <li><a href="#troubleshooting">Troubleshooting</a></li>
                 <li><a href="#safety">Safety notes</a></li>
@@ -179,14 +178,14 @@
         <p>The workflow has three stages:</p>
         <ol>
             <li><strong>Preview</strong> — the app derives your wallet addresses and shows you what's in each one. Nothing is signed, nothing is broadcast. Free, unlimited.</li>
-            <li><strong>Buy credits</strong> — one credit = one wallet swept. If you sweep 5 mnemonics in one run, that's 5 credits. You pay in crypto (USDC, ETH, SOL, or BTC). Credits never expire.</li>
+            <li><strong>Set a destination</strong> — choose the wallet that receives the swept USDC. Use a different address than the ones you're sweeping — the sweep wallets get emptied.</li>
             <li><strong>Execute</strong> — the app swaps every token to USDC and sends the USDC to the destination address you chose. Every transaction is signed locally. Gas is sponsored for wallets that need it.</li>
         </ol>
 
         <div class="guide-callout">
             <strong>Tip:</strong> Always run a preview first. It takes a few seconds, tells you
-            exactly what the app will do, and tells you how many credits the sweep will cost
-            — before you commit anything.
+            exactly what the app will do, and shows you what you're working with before you
+            commit anything.
         </div>
 
         <h2 id="wallet-source">2. Choosing a wallet source</h2>
@@ -200,7 +199,6 @@
         <ul>
             <li><strong>Best for:</strong> users with a browser wallet already installed</li>
             <li><strong>Chains:</strong> EVM only (Ethereum, Arbitrum, Optimism, Base, Polygon, BNB)</li>
-            <li><strong>Credits:</strong> 1 credit for the connected wallet</li>
             <li><strong>Note:</strong> MetaMask, Rabby, and Coinbase Wallet handle multi-chain switching
                 reliably. Phantom and some others only support one chain at a time.</li>
         </ul>
@@ -213,7 +211,6 @@
         <ul>
             <li><strong>Best for:</strong> users who hold keys on a phone</li>
             <li><strong>Chains:</strong> EVM only</li>
-            <li><strong>Credits:</strong> 1 credit for the connected wallet</li>
             <li><strong>Note:</strong> you approve each transaction on your phone</li>
         </ul>
 
@@ -226,7 +223,6 @@
         <ul>
             <li><strong>Best for:</strong> sweeping wallets across EVM + Solana + Bitcoin, or when you don't want to sign dozens of popups</li>
             <li><strong>Chains:</strong> everything</li>
-            <li><strong>Credits:</strong> 1 credit per mnemonic. Paste 5 phrases, sweep 5 mnemonics → 5 credits.</li>
             <li><strong>Security:</strong> the phrases never leave your browser. Verify with DevTools → Network before entering anything.</li>
         </ul>
 
@@ -272,10 +268,6 @@
             Check only the chains you want to sweep. Fewer chains = faster preview and
             fewer transactions. Uncheck everything except one chain for a focused test.
         </p>
-        <p>
-            <strong>Credit cost does not change with chain count.</strong> One wallet = one
-            credit, whether you sweep one chain or all six.
-        </p>
 
         <h2 id="preview">5. Running a preview</h2>
         <p>Click <strong>Preview</strong>. The app will:</p>
@@ -283,7 +275,7 @@
             <li>Derive addresses from each mnemonic (or read the connected wallet's address)</li>
             <li>Query balances for every chain you selected</li>
             <li>Discover every token with a non-zero balance</li>
-            <li>Report what it found in the output log, including how many credits the live sweep will cost</li>
+            <li>Report what it found in the output log</li>
         </ol>
         <p>
             Nothing is signed. Nothing is broadcast. Preview is completely free and you
@@ -302,41 +294,11 @@
             untouched — that's correct behavior.
         </div>
 
-        <h2 id="credit">6. Buying credits</h2>
+        <h2 id="live">6. Running a live sweep</h2>
         <p>
-            <strong>One credit = one wallet swept.</strong> A wallet is one mnemonic
-            (spanning all its EVM, Solana, and Bitcoin addresses) or one connected
-            wallet. Sweeping 5 mnemonics costs 5 credits, regardless of how many
-            chains or tokens are involved.
-        </p>
-        <p>Prices:</p>
-        <ul>
-            <li>1 credit — $10</li>
-            <li>5 credits — $20 ($4.00 per wallet)</li>
-            <li>10 credits — $40 ($4.00 per wallet)</li>
-            <li>25 credits — $80 ($3.20 per wallet)</li>
-            <li>50 credits — $150 ($3.00 per wallet)</li>
-        </ul>
-        <p>To buy:</p>
-        <ol>
-            <li>Click <strong>Buy credits</strong> in the top nav, or just click Run in live mode — if you're short on credits, the app opens the buy modal automatically with a suggestion that covers the gap.</li>
-            <li>Pick a bundle</li>
-            <li>Pick a payment method: USDC on Base (cheapest), USDC on Ethereum, ETH on Base, SOL, or BTC</li>
-            <li>Send the exact amount shown to the address shown</li>
-            <li>The app polls for confirmation and credits your account automatically</li>
-        </ol>
-        <div class="guide-callout">
-            <strong>Pay attention to the amount.</strong> Each payment has a unique
-            fractional amount (like <code>5.00123</code> USDC) so the app can identify
-            it. Send the exact number — rounding may cause the payment to not be
-            detected.
-        </div>
-
-        <h2 id="live">7. Running a live sweep</h2>
-        <p>
-            Once you have credits, switch to <strong>Live</strong> mode and click
-            <strong>Run</strong>. There is no confirmation dialog — the button
-            executes immediately.
+            Once your destination is set and the preview looks right, switch to
+            <strong>Live</strong> mode and click <strong>Run</strong>. There is no
+            confirmation dialog — the button executes immediately.
         </p>
         <p>
             <strong>Before you click:</strong> make sure the destination is correct and
@@ -344,10 +306,8 @@
         </p>
         <p>What happens next:</p>
         <ol>
-            <li>The app checks your balance. If you don't have enough credits for every wallet in the run, it opens the buy modal with a suggested bundle to cover the gap. Cancel the modal and nothing runs, nothing is consumed.</li>
             <li>For each wallet in sequence:
                 <ul>
-                    <li>One credit is consumed for that wallet</li>
                     <li>Gas is sponsored automatically if the wallet doesn't have enough native token</li>
                     <li>Existing USDC is transferred directly to your destination (no fee)</li>
                     <li>Other tokens are approved and swapped: 90% of the USDC goes to your destination, 10% to the service fee wallet, in the same transaction</li>
@@ -359,8 +319,8 @@
         </ol>
         <p>
             <strong>If a wallet fails mid-run</strong> (network drops, RPC goes down), the
-            app stops. The wallets that already ran keep their consumption; the ones
-            that didn't run keep their credits.
+            app stops. Wallets that already ran are unaffected. The ones that didn't
+            run just don't run — nothing is charged and nothing is broadcast.
         </p>
         <p>The log shows one line per token:</p>
         <ul>
@@ -384,14 +344,7 @@
             the swept UTXOs.
         </div>
 
-        <h2 id="troubleshooting">8. Troubleshooting</h2>
-
-        <h3>"You need N more credits to continue this sweep"</h3>
-        <p>
-            Your balance is lower than the number of wallets in this run. The app
-            opens the buy modal automatically. Buy the suggested bundle and the
-            sweep resumes; cancel and nothing runs.
-        </p>
+        <h2 id="troubleshooting">7. Troubleshooting</h2>
 
         <h3>"The Provider is not connected to the requested chain"</h3>
         <p>
@@ -415,13 +368,6 @@
             stays in the wallet untouched.
         </p>
 
-        <h3>Payment not detected</h3>
-        <p>
-            Wait 60-90 seconds. Blockchain confirmation takes time, and the payment
-            scanner checks for the exact amount you were quoted. If it's been more than
-            5 minutes, verify the amount you sent matches what was shown.
-        </p>
-
         <h3>Solana sweep skipped for "needs ~0.025 SOL"</h3>
         <p>
             The Solana wallet doesn't have enough native SOL to cover the
@@ -435,7 +381,7 @@
             has a minimum, and below that the outbound fees eat everything.
         </p>
 
-        <h2 id="safety">9. Safety notes</h2>
+        <h2 id="safety">8. Safety notes</h2>
         <ul>
             <li>
                 <strong>Verify your destination address.</strong> Type it, paste it, then
@@ -443,8 +389,7 @@
             </li>
             <li>
                 <strong>Run a dry run first.</strong> It's free and takes seconds. It
-                shows you exactly what the live sweep will do, and how many credits
-                it will cost.
+                shows you exactly what the live sweep will do.
             </li>
             <li>
                 <strong>Live runs immediately.</strong> There is no confirmation
@@ -510,7 +455,7 @@
                     <ul>
                         <li><a href="/app.html">Launch App</a></li>
                         <li><a href="/guide.html">Guide</a></li>
-                        <li><a href="/#pricing">Pricing</a></li>
+                        <li><a href="/#fee">Pricing</a></li>
                     </ul>
                 </div>
                 <div>
