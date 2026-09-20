@@ -3,14 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PoolPort LiquiFi — Consolidate Any Crypto Wallet Into USDC</title>
-    <meta name="description" content="Non-custodial cross-chain wallet consolidation. Consolidate any wallet into USDC. Crypto-native, no card required.">
-    <meta name="theme-color" content="#0a0e1a">
+    <title>PoolPort LiquiFi — Consolidate any wallet into USDC</title>
+    <meta name="description" content="Consolidate any number of crypto wallets into USDC at a destination you choose. Every token. Every chain. Your keys never leave your browser.">
+    <meta name="theme-color" content="#050a1a">
 
-    <meta property="og:title" content="PoolPort LiquiFi — Consolidate Any Crypto Wallet Into USDC">
-    <meta property="og:description" content="Non-custodial wallet consolidation. Crypto-native payments.">
+    <meta property="og:title" content="PoolPort LiquiFi — Consolidate any wallet into USDC">
+    <meta property="og:description" content="Consolidate any number of crypto wallets into USDC at a destination you choose. Every token. Every chain.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://liquifi.poolport.xyz">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
 
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
@@ -18,7 +22,7 @@
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">
+            <a href="/" class="brand">
                 <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                     <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
@@ -27,8 +31,8 @@
             </a>
             <div class="nav-links">
                 <a href="#how">How it works</a>
-                <a href="#fee">Pricing</a>
-                <a href="/guide.html">Guide</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#faq">FAQ</a>
                 <a href="/app.html" class="btn btn-primary btn-sm">Launch App</a>
             </div>
         </div>
@@ -36,70 +40,44 @@
 
     <section class="hero">
         <div class="wrap">
-            <h1>Every wallet, every chain,<br><span class="muted">one destination.</span></h1>
+            <span class="eyebrow">USDC CONSOLIDATION</span>
+            <h1>Every wallet, every chain,<br>into <span class="accent-text">USDC.</span></h1>
             <p class="lede">
-                Consolidate any wallet into USDC. Sweep every token, every chain, every dust balance
-                into one place — a destination you choose with PoolPort LiquiFi.
-                <strong>Your keys never leave your browser.</strong>
+                PoolPort LiquiFi sweeps the entire contents of any number of wallets into USDC at a destination you choose — every token, every chain, every dust balance — <strong>without your keys ever leaving your browser.</strong>
             </p>
-
             <div class="cta-row">
                 <a href="/app.html" class="btn btn-primary btn-lg">Launch App →</a>
-                <a href="/private-source.html" class="btn btn-secondary btn-lg">Why not open source?</a>
+                <a href="#how" class="btn btn-secondary btn-lg">See how it works</a>
             </div>
-
             <div class="trust-row">
-                <span>✓ Non-custodial</span>
-                <span>✓ Pay per wallet</span>
-                <span>✓ Gas sponsored</span>
-                <span>✓ Dry runs free</span>
+                <span>Non-custodial</span>
+                <span>Client-side signing</span>
+                <span>Nine chains</span>
+                <span>Preview free</span>
             </div>
         </div>
     </section>
 
     <section class="problem">
         <div class="wrap">
-            <h2>The problem</h2>
+            <span class="section-label">The problem</span>
             <div class="two-col">
-               <div>
-                    <p><strong>Existing tools don't solve this:</strong></p>
+                <div>
+                    <h3>Wallets accumulate. Value gets stranded.</h3>
                     <ul>
-                        <li><strong>Revoke.cash</strong> revokes approvals, doesn't move assets</li>
-                        <li><strong>DeBank</strong> shows portfolios, doesn't act</li>
-                        <li><strong>Zerion / Rainbow</strong> work one wallet at a time</li>
+                        <li>You've accumulated wallets across years and chains. Dust tokens scattered everywhere. <strong>Converting them one by one is a nightmare</strong></li>
+                        <li>An old seed might be compromised. You need to <strong>sweep everything to safety</strong> — without missing a single token</li>
+                        <li>Revoke.cash revokes approvals. DeBank shows portfolios. <strong>Nobody actually moves the assets</strong></li>
+                        <li>Every tool works one wallet at a time. You want <strong>all of them, in one pass</strong></li>
                     </ul>
-                    <p>Nobody does <em>"sweep everything to one place as USDC."</em></p>
                 </div>
                 <div>
-                    <p><strong>How PoolPort LiquiFi compares:</strong></p>
-                    <ul>
-                        <li><strong>Revoke.cash</strong> → PoolPort LiquiFi also moves the assets</li>
-                        <li><strong>DeBank</strong> → PoolPort LiquiFi also acts on them</li>
-                        <li><strong>Zerion / Rainbow</strong> → PoolPort LiquiFi handles many wallets at once</li>
-                        <li><strong>Fireblocks</strong> → PoolPort LiquiFi is consumer-priced and non-custodial</li>
-                    </ul>
-                </div>
-            </div>
-
-            <div class="problem-extra">
-                <div class="problem-extra-block">
-                    <p><strong>What PoolPort LiquiFi adds:</strong></p>
+                    <h3>PoolPort LiquiFi solves it in one flow.</h3>
                     <ul>
                         <li><strong>Every token, every chain, in one pass.</strong> Finds what you forgot and moves it all to USDC at a destination you choose.</li>
-                        <li><strong>Handles multiple wallets</strong> — swept sequentially, in one run.</li>
-                        <li><strong>Gas sponsored.</strong> Source wallets that need native gas for the sweep are sponsored automatically by us.</li>
-                        <li><strong>Sweeps fast in emergencies.</strong> If a seed may be compromised, move everything now.</li>
-                    </ul>
-                </div>
-
-                <div class="problem-extra-block">
-                    <p><strong>Non-custodial by design:</strong></p>
-                    <ul>
-                        <li>Your mnemonics never leave your browser</li>
-                        <li>Every transaction signed locally — no server holds your keys</li>
-                        <li>No account, no KYC, no email required</li>
-                        <li>Works with mnemonic, WalletConnect, Ledger, or Trezor</li>
-                        <li>Independently verifiable — check DevTools → Network yourself</li>
+                        <li><strong>Handles multiple wallets.</strong> Paste them all, run one sweep, get everything out.</li>
+                        <li><strong>Sweeps into USDC.</strong> Not into another volatile token. Stablecoins at a wallet you control.</li>
+                        <li><strong>Gas sponsored when you need it.</strong> Empty wallet with tokens stuck inside? We front the gas on EVM.</li>
                     </ul>
                 </div>
             </div>
@@ -108,121 +86,136 @@
 
     <section id="how" class="how">
         <div class="wrap">
-            <h2>How it works</h2>
+            <span class="section-label">How it works</span>
+            <h2>Four steps. One sweep.</h2>
+            <p class="lede">Every transaction is signed and broadcast from your browser. PoolPort LiquiFi's servers never touch your keys, your funds, or your phrases.</p>
+
             <div class="steps">
                 <div class="step">
-                    <div class="step-num">1</div>
-                    <h3>Paste phrases</h3>
-                    <p>One BIP-39 mnemonic per line. Stays in your browser. Never transmitted.</p>
+                    <span class="step-num">01 / PASTE</span>
+                    <h3>Enter your wallets</h3>
+                    <p>One BIP-39 mnemonic per line, plus your destination. Nothing is transmitted.</p>
                 </div>
                 <div class="step">
-                    <div class="step-num">2</div>
-                    <h3>Preview (free)</h3>
-                    <p>See every token, every balance, every quote. Nothing is broadcast.</p>
+                    <span class="step-num">02 / PREVIEW</span>
+                    <h3>See the full plan</h3>
+                    <p>Every token, every balance, every quote across every chain you selected. Nothing is signed yet.</p>
                 </div>
                 <div class="step">
-                    <div class="step-num">3</div>
+                    <span class="step-num">03 / CONFIRM</span>
                     <h3>Set your destination</h3>
-                    <p>Choose the wallet that receives the swept USDC. Use a different address than the ones you're sweeping.</p>
+                    <p>Choose the wallet that receives the swept USDC. Use a different address than the ones you're emptying.</p>
                 </div>
                 <div class="step">
-                    <div class="step-num">4</div>
-                    <h3>Execute</h3>
-                    <p>Every transaction is signed locally. Gas is sponsored for wallets that need it. USDC lands at your chosen destination.</p>
+                    <span class="step-num">04 / SWEEP</span>
+                    <h3>Watch it execute</h3>
+                    <p>Each wallet sweeps in sequence. Every token swaps to USDC and lands at your destination. Full report at the end.</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <section id="fee" class="pricing">
+    <section class="value">
         <div class="wrap">
-            <h2>Simple, transparent pricing</h2>
-            <p class="lede">A 10% service fee is taken at swap time by the routing protocol. No up-front payment. No account. No credits to buy.</p>
+            <span class="section-label centered">Why PoolPort LiquiFi</span>
+            <h2 class="centered">Built for people with a lot of wallets to consolidate.</h2>
+            <p class="lede centered">Three things every alternative gets wrong.</p>
 
-            <div class="pricing-grid pricing-grid-3">
-                <div class="price-card">
-                    <h3>Dry Run</h3>
-                    <div class="price">$0</div>
-                    <p class="price-sub">Always free</p>
-                    <ul>
-                        <li>Unlimited previews</li>
-                        <li>All chains, all families</li>
-                        <li>Nothing broadcast</li>
-                        <li>No commitment</li>
-                    </ul>
-                    <a href="/app.html" class="btn btn-primary btn-block">Start dry run</a>
+            <div class="value-cards">
+                <div class="value-card">
+                    <span class="value-num">01</span>
+                    <h3>No seed leaves your browser</h3>
+                    <p>Derivation, signing, and broadcast all happen on your device. No request carries your phrase. Verify it yourself with DevTools — the network tab shows every request, and none of them contain your keys.</p>
                 </div>
-
-                <div class="price-card featured">
-                    <div class="badge">Live sweep</div>
-                    <h3>10% fee</h3>
-                    <div class="price">10<span>%</span></div>
-                    <p class="price-sub">Taken from the swept value</p>
-                    <ul>
-                        <li>90% delivered to your destination</li>
-                        <li>Fee taken atomically at swap time</li>
-                        <li>Never held by us</li>
-                        <li>No up-front payment</li>
-                    </ul>
-                    <a href="/app.html" class="btn btn-primary btn-block">Launch App</a>
+                <div class="value-card">
+                    <span class="value-num">02</span>
+                    <h3>Every token, every chain</h3>
+                    <p>Six EVM chains, Solana, and Bitcoin. Auto-discovers every token in each wallet, including the ones you forgot. Swaps everything into USDC at your destination.</p>
                 </div>
-
-                <div class="price-card">
-                    <h3>Gas</h3>
-                    <div class="price">Sponsored</div>
-                    <p class="price-sub">For EVM wallets that need it</p>
-                    <ul>
-                        <li>No need to pre-fund sweep wallets</li>
-                        <li>Solana source wallets need a small SOL buffer</li>
-                        <li>Bitcoin fees deducted from swept UTXOs</li>
-                        <li>We cover the gas on EVM</li>
-                    </ul>
-                    <a href="/guide.html" class="btn btn-secondary btn-block">Read the guide</a>
+                <div class="value-card">
+                    <span class="value-num">03</span>
+                    <h3>Gas sponsored when needed</h3>
+                    <p>An old wallet with valuable tokens but no ETH, BNB, or POL to move them? We send it enough gas to complete the sweep, then recover the cost from the swap. You're never stuck.</p>
                 </div>
             </div>
-
-            <p class="pricing-note">
-                No account, no email, no card. Fees are taken by the underlying routing protocol
-                (0x on EVM, deBridge on Solana, THORChain on Bitcoin) and delivered directly to
-                the fee wallet in the same transaction that pays you.
-            </p>
         </div>
     </section>
 
-    <section class="faq">
+    <section class="chains">
         <div class="wrap">
-            <h2>FAQ</h2>
+            <div class="chains-inner">
+                <span class="chain-name">Ethereum</span>
+                <span class="chain-name">Arbitrum</span>
+                <span class="chain-name">Optimism</span>
+                <span class="chain-name">Base</span>
+                <span class="chain-name">Polygon</span>
+                <span class="chain-name">BNB Chain</span>
+                <span class="chain-name">Solana</span>
+                <span class="chain-name">Bitcoin</span>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="pricing">
+        <div class="wrap">
+            <span class="section-label centered">Pricing</span>
+            <h2 class="centered">One fee. Taken at swap time.</h2>
+            <p class="lede centered">No subscriptions. No credits. No up-front payment. Preview is always free.</p>
+
+            <div class="pricing-card">
+                <div class="pricing-rate">10<span class="unit">%</span></div>
+                <p class="pricing-sub">of the swept value. 90% lands at your destination in the same transaction.</p>
+
+                <ul class="pricing-points">
+                    <li>Fee taken atomically at swap time</li>
+                    <li>Never held by us, even temporarily</li>
+                    <li>90% delivered to your destination</li>
+                    <li>No up-front payment, no credits</li>
+                    <li>Preview is always free</li>
+                    <li>Fee collected by 0x / deBridge / THORChain on-chain</li>
+                </ul>
+
+                <a href="/app.html" class="btn btn-primary btn-lg">Launch App →</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="faq" class="faq">
+        <div class="wrap">
+            <span class="section-label">FAQ</span>
+            <h2>Questions.</h2>
+
             <details>
-                <summary>Do you ever see my seed phrase?</summary>
-                <p>No. Never. The mnemonic is entered into an HTML form and processed entirely in JavaScript. The signing happens in your browser.</p>
+                <summary>Does PoolPort LiquiFi ever see my seed phrase?</summary>
+                <p>No. Phrase handling runs entirely in your browser — derivation, signing, and broadcast. No request carries any part of a mnemonic. You can verify this yourself: open DevTools, click the Network tab, run a preview, and inspect every request. None of them contains your phrase.</p>
             </details>
             <details>
-                <summary>How do I verify that?</summary>
-                <p>Open DevTools → Network. Paste a mnemonic. Click Preview. Search every request for a word from your phrase. You'll find nothing. See <a href="/private-source.html">why the source is private</a> and what else you can verify.</p>
-            </details>
-            <details>
-                <summary>Why isn't the source code public?</summary>
-                <p>The fee and routing logic is the core of the product, and client-side bundles are trivially decompiled. We've laid out the full reasoning — and what you can still verify without source — at <a href="/private-source.html">/private-source.html</a>. Security researchers can request NDA access to the private repo.</p>
-            </details>
-            <details>
-                <summary>How does the fee work?</summary>
-                <p>A 10% service fee is taken at swap time by the underlying routing protocol. You receive 90% of the swept value directly at your destination address, in the same transaction. There is no up-front payment, no account, and no credits to buy. The fee is collected by the routing protocol on-chain — never held by us.</p>
+                <summary>What does it cost?</summary>
+                <p>A 10% service fee is taken at swap time by the underlying routing protocol (0x on EVM, deBridge on Solana, THORChain on Bitcoin). 90% of the swept value is delivered directly to your destination address in the same transaction. There is no up-front payment, no account, and no credits to buy. Preview is free.</p>
             </details>
             <details>
                 <summary>How does gas work? Do I need ETH in my sweep wallets?</summary>
                 <p>No. We sponsor gas automatically for EVM wallets that don't have enough native token (ETH, BNB, POL) to run the sweep. You don't need to pre-fund your sweep wallets. Solana source wallets still need a small SOL balance for the bridge order fee, and Bitcoin fees are deducted from the swept UTXOs.</p>
             </details>
             <details>
+                <summary>Which chains are supported?</summary>
+                <p>Ethereum, Arbitrum, Optimism, Base, Polygon, and BNB Chain for EVM. Plus Solana and Bitcoin as their own families. That's eight chains across three families in a single sweep flow.</p>
+            </details>
+            <details>
                 <summary>How many wallets can I sweep?</summary>
-                <p>As many as you have. Paste multiple mnemonics, or run the sweep multiple times. There is no limit and no per-wallet charge beyond the 10% fee on the swept value.</p>
+                <p>As many as you have. Paste multiple mnemonics, one per line, and they all sweep in sequence. There is no limit and no per-wallet charge beyond the 10% fee on each wallet's swept value.</p>
             </details>
             <details>
                 <summary>What if a token has no route to USDC?</summary>
-                <p>It's skipped. You'll see it in the preview with a "no route" label. The token stays in your wallet untouched.</p>
+                <p>It's skipped. You'll see it in the preview with a "no route" label. The token stays in your wallet untouched — spam airdrops and illiquid tokens are left alone by design.</p>
             </details>
             <details>
                 <summary>Can I use this with a hardware wallet?</summary>
                 <p>Yes, on EVM chains — Ledger (via WebHID) and Trezor are supported. Solana and Bitcoin sweeping currently require a mnemonic.</p>
+            </details>
+            <details>
+                <summary>Why isn't the source code public?</summary>
+                <p>The fee and routing logic is the core of the product, and client-side bundles are trivially decompiled. We've laid out the full reasoning — and what you can still verify without source — at <a href="/private-source.html">/private-source.html</a>. Security researchers can request NDA access to the private repo.</p>
             </details>
             <details>
                 <summary>Is this legal?</summary>
@@ -234,8 +227,7 @@
     <section class="final-cta">
         <div class="wrap">
             <h2>Ready to clean up your wallet graveyard?</h2>
-            <a href="/app.html" class="btn btn-primary btn-lg">Launch App →</a>
-            <p class="hint">Dry runs are free. Pay nothing up front — the fee comes out of the sweep.</p>
+            <a href="/app.html" class="btn btn-primary btn-lg">Launch PoolPort LiquiFi →</a>
         </div>
     </section>
 
@@ -243,21 +235,22 @@
         <div class="wrap">
             <div class="footer-grid">
                 <div>
-                    <div class="logo">
-                        <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <div class="footer-brand">
+                        <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width: 20px; height: 20px;">
                             <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                             <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
                         </svg>
                         <span>PoolPort LiquiFi</span>
                     </div>
-                    <p class="footer-tag">Non-custodial wallet consolidation.</p>
+                    <p class="footer-tag">Non-custodial wallet consolidation. Your keys never leave your browser.</p>
                 </div>
                 <div>
                     <h4>Product</h4>
                     <ul>
                         <li><a href="/app.html">Launch App</a></li>
                         <li><a href="/guide.html">Guide</a></li>
-                        <li><a href="#fee">Pricing</a></li>
+                        <li><a href="#pricing">Pricing</a></li>
+                        <li><a href="#faq">FAQ</a></li>
                     </ul>
                 </div>
                 <div>
@@ -272,14 +265,13 @@
                     <ul>
                         <li><a href="/terms.html">Terms of Service</a></li>
                         <li><a href="/privacy.html">Privacy Policy</a></li>
-                        <li><a href="/security-policy.html">Security Policy</a></li>
                     </ul>
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>© 2026 PoolPort. All rights reserved. Provided as-is, no warranty.</p>
-                <p style="font-size: 11px; margin-top: 8px;">
-                    Built 2026-09-20T05:52:59.542Z · bundle e6178dfb3cc68e6017ed14f021786113549a528fbe3df62259c76020fe959313 · 5431.3 KB
+                <p>© 2026 PoolPort. Provided as-is, no warranty.</p>
+                <p style="font-family: var(--font-mono); font-size: 11px;">
+                    Build 2026-09-20T06:11:17.119Z · e6178dfb3cc68e6017ed14f021786113549a528fbe3df62259c76020fe959313 · 5431.3 KB
                 </p>
             </div>
         </div>

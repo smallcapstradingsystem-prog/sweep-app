@@ -5,134 +5,164 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Guide — How to use PoolPort LiquiFi</title>
     <meta name="description" content="Step-by-step guide to using PoolPort LiquiFi: pick a wallet source, preview balances, set a destination, and sweep your wallets into USDC.">
-    <meta name="theme-color" content="#0a0e1a">
+    <meta name="theme-color" content="#050a1a">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
     <style>
         .guide {
             max-width: 780px;
             margin: 0 auto;
-            padding: 60px 24px 80px;
+            padding: 72px 32px 96px;
         }
         .guide h1 {
-            font-size: 42px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            margin-bottom: 12px;
+            font-family: var(--font-display);
+            font-size: 46px;
+            font-weight: 800;
+            letter-spacing: -0.032em;
+            line-height: 1.1;
+            margin: 16px 0 16px;
         }
         .guide .subtitle {
-            color: var(--muted);
-            font-size: 18px;
-            margin-bottom: 48px;
+            color: var(--text-muted);
+            font-size: 19px;
+            line-height: 1.6;
+            margin-bottom: 56px;
+            max-width: 620px;
         }
         .guide h2 {
-            font-size: 26px;
+            font-family: var(--font-display);
+            font-size: 28px;
             font-weight: 700;
+            letter-spacing: -0.02em;
             text-align: left;
-            margin: 56px 0 12px;
-            letter-spacing: -0.01em;
+            margin: 64px 0 16px;
+            line-height: 1.2;
         }
         .guide h3 {
-            font-size: 18px;
+            font-family: var(--font-display);
+            font-size: 19px;
             font-weight: 600;
-            margin: 32px 0 8px;
+            letter-spacing: -0.012em;
+            margin: 36px 0 10px;
             color: var(--text);
         }
         .guide p, .guide li {
-            color: var(--muted);
+            color: var(--text-muted);
             font-size: 16px;
             line-height: 1.75;
         }
         .guide p { margin-bottom: 16px; }
         .guide ul, .guide ol {
-            padding-left: 24px;
+            padding-left: 22px;
             margin-bottom: 20px;
         }
         .guide li { margin-bottom: 8px; }
-        .guide strong { color: var(--text); }
+        .guide strong { color: var(--text); font-weight: 600; }
         .guide a { color: var(--accent); }
 
         .guide code {
-            background: #161b22;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
             padding: 2px 6px;
             border-radius: 4px;
-            font-family: ui-monospace, monospace;
-            font-size: 14px;
-            color: #00d4aa;
+            font-family: var(--font-mono);
+            font-size: 13.5px;
+            color: var(--text);
         }
 
         .guide-callout {
-            background: rgba(0, 212, 170, 0.08);
-            border-left: 3px solid var(--accent);
+            background: rgba(37, 99, 235, 0.06);
+            border-left: 2px solid var(--accent);
             padding: 16px 20px;
-            border-radius: 4px;
-            margin: 20px 0;
+            border-radius: 8px;
+            margin: 24px 0;
             font-size: 15px;
-            color: var(--muted);
+            line-height: 1.7;
+            color: var(--text-muted);
         }
         .guide-callout strong { color: var(--text); }
 
         .guide-warn {
-            background: rgba(187, 128, 9, 0.1);
-            border-left: 3px solid #bb8009;
+            background: rgba(245, 158, 11, 0.06);
+            border-left: 2px solid var(--warning);
             padding: 16px 20px;
-            border-radius: 4px;
-            margin: 20px 0;
+            border-radius: 8px;
+            margin: 24px 0;
             font-size: 15px;
-            color: #e3b341;
+            line-height: 1.7;
+            color: var(--text-muted);
         }
-        .guide-warn strong { color: #f0c674; }
+        .guide-warn strong { color: var(--warning); }
 
         .toc {
-            background: var(--bg-card);
+            background: var(--bg-elevated);
             border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 20px 24px;
-            margin-bottom: 40px;
+            border-radius: 12px;
+            padding: 24px 28px;
+            margin-bottom: 48px;
         }
         .toc h4 {
-            font-size: 13px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--muted);
-            margin-bottom: 12px;
+            letter-spacing: 0.16em;
+            color: var(--text-dim);
+            margin-bottom: 16px;
         }
         .toc ol {
             padding-left: 20px;
             margin: 0;
         }
         .toc li {
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             font-size: 15px;
         }
         .toc a {
-            color: var(--text);
+            color: var(--text-muted);
             text-decoration: none;
+            transition: color 0.15s;
         }
         .toc a:hover {
-            color: var(--accent);
-            text-decoration: underline;
+            color: var(--text);
         }
 
         .back-link {
             display: inline-block;
-            margin-bottom: 24px;
-            color: var(--muted);
-            font-size: 14px;
+            margin-bottom: 8px;
+            color: var(--text-dim);
+            font-size: 13px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            transition: color 0.15s;
         }
-        .back-link:hover { color: var(--text); text-decoration: none; }
+        .back-link:hover { color: var(--text); }
+
+        .guide-cta {
+            margin-top: 72px;
+            text-align: center;
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+        }
 
         @media (max-width: 640px) {
-            .guide h1 { font-size: 30px; }
-            .guide h2 { font-size: 22px; }
-            .guide { padding: 40px 20px 60px; }
+            .guide { padding: 40px 20px 64px; }
+            .guide h1 { font-size: 32px; }
+            .guide h2 { font-size: 22px; margin-top: 48px; }
+            .guide .subtitle { font-size: 17px; margin-bottom: 40px; }
         }
     </style>
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">
+            <a href="/" class="brand">
                 <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                     <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
@@ -150,6 +180,7 @@
     <main class="guide">
         <a href="/app.html" class="back-link">← Back to app</a>
 
+        <span class="section-label">Guide</span>
         <h1>How to use PoolPort LiquiFi</h1>
         <p class="subtitle">
             A complete walkthrough — from picking a wallet source to receiving USDC at your destination.
@@ -432,30 +463,31 @@
             <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
         </div>
 
-        <p style="margin-top: 60px; text-align: center;">
+        <div class="guide-cta">
             <a href="/app.html" class="btn btn-primary btn-lg">Launch App →</a>
-        </p>
+        </div>
     </main>
 
     <footer class="footer">
         <div class="wrap">
             <div class="footer-grid">
                 <div>
-                    <div class="logo">
-                        <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <div class="footer-brand">
+                        <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width: 20px; height: 20px;">
                             <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                             <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
                         </svg>
                         <span>PoolPort LiquiFi</span>
                     </div>
-                    <p class="footer-tag">Non-custodial wallet consolidation.</p>
+                    <p class="footer-tag">Non-custodial wallet consolidation. Your keys never leave your browser.</p>
                 </div>
                 <div>
                     <h4>Product</h4>
                     <ul>
                         <li><a href="/app.html">Launch App</a></li>
                         <li><a href="/guide.html">Guide</a></li>
-                        <li><a href="/#fee">Pricing</a></li>
+                        <li><a href="/#pricing">Pricing</a></li>
+                        <li><a href="/#faq">FAQ</a></li>
                     </ul>
                 </div>
                 <div>
@@ -470,12 +502,14 @@
                     <ul>
                         <li><a href="/terms.html">Terms of Service</a></li>
                         <li><a href="/privacy.html">Privacy Policy</a></li>
-                        <li><a href="/security-policy.html">Security Policy</a></li>
                     </ul>
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>© 2026 PoolPort. All rights reserved. Provided as-is, no warranty.</p>
+                <p>© 2026 PoolPort. Provided as-is, no warranty.</p>
+                <p style="font-family: var(--font-mono); font-size: 11px;">
+                    Build {%BUILD_DATE%} · {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
+                </p>
             </div>
         </div>
     </footer>

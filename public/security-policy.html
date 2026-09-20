@@ -5,13 +5,101 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security model — PoolPort LiquiFi</title>
     <meta name="description" content="How PoolPort LiquiFi handles your keys, what it can and cannot do, and how to verify the claims.">
+    <meta name="theme-color" content="#050a1a">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
+    <style>
+        .legal-page {
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 72px 32px 96px;
+        }
+        .legal-page h1 {
+            font-family: var(--font-display);
+            font-size: 46px;
+            font-weight: 800;
+            letter-spacing: -0.032em;
+            line-height: 1.1;
+            margin: 16px 0 16px;
+        }
+        .legal-page .lede {
+            color: var(--text-muted);
+            font-size: 19px;
+            line-height: 1.6;
+            margin-bottom: 56px;
+            max-width: 620px;
+        }
+        .legal-page section { padding: 0; margin-bottom: 48px; }
+        .legal-page h2 {
+            font-family: var(--font-display);
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 16px;
+            line-height: 1.25;
+        }
+        .legal-page p {
+            color: var(--text-muted);
+            font-size: 15px;
+            line-height: 1.75;
+            margin-bottom: 14px;
+        }
+        .legal-page ul {
+            padding-left: 24px;
+            margin-bottom: 20px;
+        }
+        .legal-page li {
+            color: var(--text-muted);
+            font-size: 15px;
+            line-height: 1.75;
+            margin-bottom: 8px;
+        }
+        .legal-page strong { color: var(--text); font-weight: 600; }
+        .legal-page a { color: var(--accent); }
+        .legal-page code {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: var(--text);
+        }
+        .legal-page pre {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            padding: 16px 18px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+        .legal-page pre code {
+            background: transparent;
+            border: none;
+            padding: 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        @media (max-width: 640px) {
+            .legal-page { padding: 40px 20px 64px; }
+            .legal-page h1 { font-size: 32px; }
+            .legal-page h2 { font-size: 20px; }
+            .legal-page .lede { font-size: 17px; margin-bottom: 40px; }
+        }
+    </style>
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">
+            <a href="/" class="brand">
                 <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                     <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
@@ -27,14 +115,14 @@
         </div>
     </nav>
 
-    <main class="wrap" style="max-width: 760px; padding-top: 60px; padding-bottom: 80px;">
-
-        <h1 style="margin-bottom: 12px;">Security model</h1>
-        <p class="lede" style="margin-bottom: 40px;">
+    <main class="legal-page">
+        <span class="section-label">Security</span>
+        <h1>Security model</h1>
+        <p class="lede">
             What PoolPort LiquiFi can do, what it can't do, and how you can verify both yourself.
         </p>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Threat model</h2>
             <p>
                 PoolPort LiquiFi is designed to protect against two classes of risk:
@@ -48,7 +136,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Key handling</h2>
             <p>
                 Your mnemonic is entered into an HTML <code>&lt;textarea&gt;</code>. It is processed
@@ -67,7 +155,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Signing</h2>
             <p>
                 All transaction signing happens locally:
@@ -84,7 +172,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>What the servers do</h2>
             <p>
                 PoolPort LiquiFi runs three Cloudflare Workers:
@@ -100,7 +188,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>How the fee is taken</h2>
             <p>
                 The 10% service fee is collected atomically at swap time by the underlying routing
@@ -118,19 +206,14 @@
             </p>
         </section>
 
-        <!-- TONIGHT: rewritten to be accurate. The previous version claimed SRI
-             defends against origin compromise. It does not. SRI defends against
-             transit and CDN tampering. The hash comparison against latest.txt is
-             the check that catches origin tampering, and only if the reader has
-             an independent copy of the hash. -->
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Release integrity</h2>
             <p>
                 Every build publishes a SHA-256 hash at
                 <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>.
                 To verify the bundle you're running matches what we published:
             </p>
-            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
+            <pre><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
             <p>
                 The output should match <code>sha256_hex</code> in
                 <code>latest.txt</code>. If it doesn't, do not use the app.
@@ -156,7 +239,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Why the source isn't public</h2>
             <p>
                 PoolPort LiquiFi's source is proprietary. This is a trade-off we discuss in detail at
@@ -166,7 +249,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>Reporting a vulnerability</h2>
             <p>
                 If you believe you've found a security issue, email
@@ -184,7 +267,7 @@
             </p>
         </section>
 
-        <section style="margin-bottom: 48px;">
+        <section>
             <h2>What we will never do</h2>
             <ul>
                 <li>Transmit your mnemonic, seed, or private keys</li>
@@ -200,7 +283,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/private-source.html">Source policy</a></p>
+                <p>© 2026 PoolPort · <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/private-source.html">Source policy</a></p>
             </div>
         </div>
     </footer>

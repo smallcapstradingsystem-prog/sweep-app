@@ -3,15 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PoolPort LiquiFi — Consolidate Any Wallet Into USDC</title>
-    <meta name="description" content="Non-custodial cross-chain wallet consolidation. Your keys never leave your browser.">
+    <title>PoolPort LiquiFi — Sweep</title>
+    <meta name="description" content="Consolidate any number of wallets into USDC. Non-custodial, client-side signing.">
+    <meta name="theme-color" content="#050a1a">
+    <meta name="robots" content="noindex, nofollow">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">
+            <a href="/" class="brand">
                 <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                     <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
@@ -21,38 +28,52 @@
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
+                <a href="/security-policy.html">Security</a>
             </div>
         </div>
     </nav>
 
-    <main class="wrap" style="padding-top: 40px; padding-bottom: 60px;">
-        <h1 style="margin-bottom: 8px;">Launch App</h1>
-        <p class="hint" style="margin-bottom: 32px;">
-            Everything runs in your browser. No server sees your keys.
-            <strong>Dry runs are free</strong> and always available.
-            First time here? <a href="/guide.html">Read the guide →</a>
+    <main class="wrap" style="padding-top: 56px; padding-bottom: 80px;">
+        <h1>Sweep</h1>
+        <p class="hint" style="margin-bottom: 36px; max-width: 620px;">
+            Consolidate any number of wallets into USDC at a destination you choose.
+            Everything runs in your browser — no phrase is ever transmitted.
+            <strong>Preview is free.</strong>
         </p>
 
-        <!-- TONIGHT: softened security claim. The old text said "runs entirely
-             in your browser" which is not literally true — the app makes
-             numerous network calls (RPC, 0x quotes, deBridge, THORChain).
-             The accurate claim is about key material, which is what matters. -->
-        <div class="alert alert-warn">
-            <strong>Security:</strong> All key material — mnemonics, derived private
-            keys, and signatures — stays in this browser tab. The app makes network
-            calls (RPC, swap quotes, bridge orders), but none of them carry your
-            keys. Verify by opening DevTools → Network and searching every request
-            for a word from your phrase.
+        <div class="alert alert-info" id="sweep-security-notice">
+            <strong>Client-side signing.</strong> Every source phrase and your destination
+            are processed locally. Derivation, signing, and broadcast all happen on your
+            device. Verify with DevTools → Network — no request carries your keys.
         </div>
 
         <section class="card">
             <h2>1. Wallet source</h2>
+            <p class="hint">
+                Pick how you want to provide your source wallets. Every method signs locally —
+                nothing leaves your device.
+            </p>
+
             <div class="checks">
-                <label><input type="radio" name="wallet-type" value="extension"> Browser extension (MetaMask, Rabby, Coinbase)</label>
-                <label><input type="radio" name="wallet-type" value="walletconnect"> WalletConnect QR code (MetaMask Mobile, Rainbow, Trust)</label>
                 <label><input type="radio" name="wallet-type" value="mnemonic" checked> Paste mnemonic(s)</label>
+                <label><input type="radio" name="wallet-type" value="extension"> Browser extension (MetaMask, Rabby, Coinbase)</label>
+                <label><input type="radio" name="wallet-type" value="walletconnect"> WalletConnect QR code</label>
                 <label><input type="radio" name="wallet-type" value="ledger"> Ledger (WebHID)</label>
                 <label><input type="radio" name="wallet-type" value="trezor"> Trezor</label>
+            </div>
+
+            <div id="wallet-mnemonic" class="wallet-section">
+                <p class="hint" style="margin-top: 16px;">One mnemonic per line. BIP-39 (12 or 24 words).</p>
+                <textarea
+                    id="phrases"
+                    rows="6"
+                    autocomplete="off"
+                    autocorrect="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="word1 word2 word3 ...&#10;word1 word2 word3 ..."
+                ></textarea>
+                <p class="hint">Supports EVM + Solana + Bitcoin derivations from the same phrase.</p>
             </div>
 
             <div id="wallet-extension" class="wallet-section" style="display:none;">
@@ -83,20 +104,6 @@
                 </p>
             </div>
 
-            <div id="wallet-mnemonic" class="wallet-section">
-                <p class="hint" style="margin-top: 16px;">One mnemonic per line. BIP-39 (12 or 24 words).</p>
-                <textarea
-                    id="phrases"
-                    rows="6"
-                    autocomplete="off"
-                    autocorrect="off"
-                    autocapitalize="off"
-                    spellcheck="false"
-                    placeholder="word1 word2 word3 ...&#10;word1 word2 word3 ..."
-                ></textarea>
-                <p class="hint">Supports EVM + Solana + Bitcoin derivations from the same phrase.</p>
-            </div>
-
             <div id="wallet-ledger" class="wallet-section" style="display:none;">
                 <p class="hint" style="margin-top: 16px;">
                     Connect your Ledger, open the Ethereum app, then click Connect.
@@ -118,47 +125,54 @@
                 </p>
             </div>
 
-            <div id="connected-banner" style="display:none; margin-top:16px; padding:12px 16px; background:rgba(35,134,54,0.1); border-left:3px solid #238636; border-radius:4px;">
-                <strong>Connected:</strong> <code id="connected-address"></code>
+            <div id="connected-banner" style="display:none; margin-top:16px; padding:12px 16px; background:rgba(16,185,129,0.06); border-left:2px solid var(--success); border-radius:8px;">
+                <strong>Connected:</strong> <code id="connected-address" style="font-family: var(--font-mono); font-size: 12px; color: var(--accent); word-break: break-all;"></code>
             </div>
 
-            <h2 style="margin-top:32px;">2. Your destination address</h2>
+            <h2 style="margin-top: 40px;">2. Destination</h2>
             <p class="hint">
-                Where the swept funds land — a wallet you choose. Use a different address than your sweep wallets.
+                The wallet that receives the swept USDC. Use a different address than the ones you're sweeping — the sweep wallets get emptied.
                 <strong>EVM, Solana, and Bitcoin sweeps all deliver USDC to this address.</strong>
             </p>
 
             <div id="dest-evm-wrap" class="dest-field">
                 <label for="dest-evm" class="dest-label">Destination (receives USDC on Ethereum)</label>
                 <input id="dest-evm" type="text" placeholder="0x..." autocomplete="off" spellcheck="false">
-                <p class="hint" style="margin-top:6px; font-size: 12px;">
+                <p class="hint" style="margin-top:8px; font-size: 13px;">
                     Solana and Bitcoin sweeps are bridged to Ethereum USDC and delivered here.
                 </p>
             </div>
 
-            <h2 style="margin-top:32px;">3. Families</h2>
+            <h2 style="margin-top: 40px;">3. Families</h2>
+            <p class="hint">Uncheck a family to leave it alone. Preview only shows what you check.</p>
             <div class="checks">
                 <label><input type="checkbox" id="family-evm" checked> EVM (Ethereum, Arbitrum, Optimism, Base, Polygon, BNB)</label>
                 <label><input type="checkbox" id="family-solana"> Solana</label>
                 <label><input type="checkbox" id="family-bitcoin"> Bitcoin</label>
             </div>
 
-            <div id="chain-list" style="margin-top:16px;">
+            <div id="chain-list" style="margin-top: 24px;">
                 <h3>EVM chains</h3>
                 <div class="checks">
                     <label><input type="checkbox" value="base" checked> Base</label>
                     <label><input type="checkbox" value="optimism" checked> Optimism</label>
                     <label><input type="checkbox" value="arbitrum" checked> Arbitrum</label>
                     <label><input type="checkbox" value="polygon"> Polygon</label>
-                    <label><input type="checkbox" value="bnb"> BNB Smart Chain</label>
-                    <label><input type="checkbox" value="ethereum"> Ethereum mainnet</label>
+                    <label><input type="checkbox" value="bnb"> BNB Chain</label>
+                    <label><input type="checkbox" value="ethereum"> Ethereum</label>
                 </div>
             </div>
 
-            <h2 style="margin-top:32px;">4. Mode</h2>
+            <h2 style="margin-top: 40px;">4. Mode</h2>
             <div class="checks">
                 <label><input type="radio" name="mode" value="dry-run" checked> Dry run (free, nothing broadcast)</label>
                 <label><input type="radio" name="mode" value="live"> Live (broadcasts real transactions)</label>
+            </div>
+
+            <div class="alert alert-info" style="margin-top: 24px;">
+                <strong>How the fee works.</strong> 10% of the swept value is taken at swap time by
+                the underlying routing protocol. 90% lands directly at your destination in the
+                same transaction. Preview is always free.
             </div>
 
             <div class="actions">
@@ -175,13 +189,13 @@
 
         <section class="card">
             <h2>How it works</h2>
-            <ol style="padding-left: 24px; color: #8b949e; font-size: 14px; line-height: 1.8;">
+            <ol style="padding-left: 22px; color: var(--text-muted); font-size: 14px; line-height: 1.85;">
                 <li>Pick a wallet source and provide its credentials.</li>
-                <li>Choose a destination address — a wallet you control.</li>
+                <li>Set a destination address — a wallet you control.</li>
                 <li>Click <strong>Preview</strong> to derive addresses and see what's in each wallet.</li>
                 <li>Review the preview. Nothing has been broadcast.</li>
-                <li>Click <strong>Run</strong> to execute.</li>
-                <li>Your funds arrive at your chosen destination.</li>
+                <li>Click <strong>Run</strong> to execute. Each wallet sweeps in sequence.</li>
+                <li>USDC arrives at your chosen destination. A 10% fee is taken at swap time.</li>
             </ol>
             <p style="margin-top: 20px; font-size: 14px;">
                 <a href="/guide.html">Read the full guide with wallet tips and troubleshooting →</a>
@@ -192,9 +206,9 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
-                <p style="font-size: 11px; color: #8b949e; margin-top: 12px;">
-                    Built {%BUILD_DATE%} · bundle {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
+                <p>© 2026 PoolPort · <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
+                <p style="margin-top: 12px;">
+                    Build {%BUILD_DATE%} · {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
                 </p>
             </div>
         </div>
@@ -203,10 +217,6 @@
     <script>
         window.__POOLPORT_LIQUIFI_RELEASE__ = "{%APP_JS_SHA256%}".slice(0, 12);
     </script>
-    <!-- TONIGHT: removed crossorigin="anonymous". The attribute is meant for
-         cross-origin scripts and forces a CORS preflight on same-origin fetches,
-         which browsers handle inconsistently. Since app.js is same-origin,
-         integrity works without it. -->
     <script src="app.js" integrity="{%APP_JS_SRI%}"></script>
 </body>
 </html>

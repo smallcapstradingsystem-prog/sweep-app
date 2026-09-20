@@ -5,13 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Why the source is private — PoolPort LiquiFi</title>
     <meta name="description" content="Why PoolPort LiquiFi's source code is not public, and how we compensate for the loss of auditability.">
+    <meta name="theme-color" content="#050a1a">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">
+            <a href="/" class="brand">
                 <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
                     <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
@@ -27,16 +33,17 @@
         </div>
     </nav>
 
-    <main class="wrap" style="max-width: 760px; padding-top: 60px; padding-bottom: 80px;">
+    <main class="wrap" style="max-width: 760px; padding-top: 72px; padding-bottom: 80px;">
 
-        <h1 style="margin-bottom: 12px;">Why the source is private</h1>
-        <p class="lede" style="margin-bottom: 40px;">
+        <span class="section-label">Source policy</span>
+        <h1 style="font-size: 42px; letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 16px;">Why the source is private</h1>
+        <p class="lede" style="font-size: 18px; color: var(--text-muted); margin-bottom: 48px; max-width: 620px;">
             We know this is a trade-off. Here's our reasoning, and how we compensate for it.
         </p>
 
         <section style="margin-bottom: 48px;">
-            <h2>The short version</h2>
-            <p>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">The short version</h2>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 PoolPort LiquiFi's source code is not public. This is a deliberate choice, not an oversight.
                 We recognize that it removes a common way for users to verify what they're running.
                 This page explains why we made the choice, what we're doing to compensate, and what
@@ -45,10 +52,10 @@
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>Why we're not publishing the source</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">Why we're not publishing the source</h2>
 
-            <p><strong>1. The fee and routing logic is the product.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">1. The fee and routing logic is the product.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 The interesting engineering in PoolPort LiquiFi is not "call a DEX." It's the specific routing
                 decisions across six EVM chains, Solana, and Bitcoin — which swap path to take, when to
                 skip a token, how to handle dust, how fee collection is structured. That logic took real
@@ -56,15 +63,15 @@
                 already a handful of copycat products in this space.
             </p>
 
-            <p><strong>2. Frontend bundles are trivially decompiled.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">2. Frontend bundles are trivially decompiled.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 Even if we wanted to obfuscate only the "secret sauce," our app is a client-side bundle.
                 Anyone can load it, prettify it, and read the minified source in about five minutes. The
                 only way to keep the routing logic proprietary is to keep it out of a public repo entirely.
             </p>
 
-            <p><strong>3. We're a small team, and publishing is a commitment.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">3. We're a small team, and publishing is a commitment.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 Open-sourcing is not just "push to GitHub." It means triaging issues from strangers,
                 reviewing pull requests, responding to security reports, and maintaining a public
                 changelog forever. We'd rather focus that energy on shipping the product and supporting
@@ -73,78 +80,71 @@
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>What this means for you</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">What this means for you</h2>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 We are honest about what you lose by not having public source. You lose:
             </p>
 
-            <ul>
-                <li><strong>The ability to read the code yourself</strong> before trusting it with a mnemonic</li>
-                <li><strong>The ability to fork it</strong> and run your own version</li>
-                <li><strong>The ability to verify</strong> that no hidden behavior was added in a release</li>
-                <li><strong>The ability to contribute fixes</strong> directly</li>
+            <ul style="padding-left: 24px; color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
+                <li><strong style="color: var(--text);">The ability to read the code yourself</strong> before trusting it with a mnemonic</li>
+                <li><strong style="color: var(--text);">The ability to fork it</strong> and run your own version</li>
+                <li><strong style="color: var(--text);">The ability to verify</strong> that no hidden behavior was added in a release</li>
+                <li><strong style="color: var(--text);">The ability to contribute fixes</strong> directly</li>
             </ul>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 Those are real losses. If any of them are non-negotiable for you, don't use PoolPort LiquiFi.
                 That's a fair decision, and we respect it.
             </p>
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>What you can still verify</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">What you can still verify</h2>
 
-            <p><strong>1. Nothing leaves your browser.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">1. Nothing leaves your browser.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 This is the most important claim, and you don't need source code to check it. Open
                 DevTools → Network. Paste a mnemonic. Run Preview. Run a dry sweep. Watch every
                 network request. No request contains any part of your phrase, any derived private
                 key, or any signed transaction data beyond what's broadcast on-chain.
             </p>
 
-            <!-- TONIGHT: rewritten. The previous version claimed SRI defended
-                 against origin compromise, which is not true — an attacker with
-                 origin write access updates the HTML and the JS together. SRI
-                 defends against transit and CDN tampering. The curl | openssl
-                 comparison against latest.txt is the check that catches origin
-                 tampering, and only if the user has an independently-known-good
-                 copy of the hash to compare against. -->
-            <p><strong>2. The bundle you're running matches what we published.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">2. The bundle you're running matches what we published.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 Every release publishes a SHA-256 hash at
-                <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>.
+                <a href="/releases/latest.txt" style="color: var(--accent);"><code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">/releases/latest.txt</code></a>.
                 You can verify the bundle you actually received matches it:
             </p>
-            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
-            <p>
-                The output should match the <code>sha256_hex</code> in
-                <code>latest.txt</code>. If it doesn't, something is wrong and you
+            <pre style="background: var(--bg-elevated); border: 1px solid var(--border); padding: 16px 18px; border-radius: 8px; overflow-x: auto; font-size: 13px; font-family: var(--font-mono); color: var(--text-muted); margin-bottom: 16px;"><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
+                The output should match the <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">sha256_hex</code> in
+                <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">latest.txt</code>. If it doesn't, something is wrong and you
                 should not use the app.
             </p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 The HTML also pins a Subresource Integrity (SRI) hash on the
-                <code>&lt;script&gt;</code> tag. This defends against tampering in
+                <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">&lt;script&gt;</code> tag. This defends against tampering in
                 transit or by a third-party CDN — if an intermediary alters
-                <code>app.js</code> between our server and your browser, the
-                browser refuses to run it. It does <strong>not</strong> defend
+                <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">app.js</code> between our server and your browser, the
+                browser refuses to run it. It does <strong style="color: var(--text);">not</strong> defend
                 against a compromise of our origin server, because an attacker
                 with origin write access could alter the HTML and the JS together.
-                The <code>curl | openssl</code> check above is the authoritative
+                The <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--text);">curl | openssl</code> check above is the authoritative
                 verification, and it only helps if you compare against a hash
                 you obtained independently of our server.
             </p>
 
-            <p><strong>3. Every signature is yours, on your device.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">3. Every signature is yours, on your device.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 If you're using a hardware wallet (Ledger or Trezor), you see every transaction on the
                 device screen before you approve it. If you're using a mnemonic, you can verify the
                 resulting on-chain transactions on any block explorer afterward. No server has the
                 ability to sign on your behalf, because no server ever sees your keys.
             </p>
 
-            <p><strong>4. The on-chain footprint is public.</strong></p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 12px;"><strong style="color: var(--text);">4. The on-chain footprint is public.</strong></p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
                 Every token approval, every swap, every transfer shows up on the blockchain. If the
                 app ever did something unexpected, it would leave a permanent, public trace. You can
                 check any address you've swept against Etherscan, Solscan, mempool.space, or any other
@@ -153,57 +153,57 @@
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>What we will never do</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">What we will never do</h2>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 Even without source code, we can commit to certain invariants — and these commitments
                 are enforceable in ways that are more meaningful than source review:
             </p>
 
-            <ul>
-                <li><strong>We will never transmit your mnemonic, seed, or private keys.</strong> If we did, you would see it in DevTools → Network instantly. This is checkable.</li>
-                <li><strong>We will never sign transactions on your behalf.</strong> We can't — we don't have the keys. This is architectural.</li>
-                <li><strong>We will never take custody of your funds.</strong> The only addresses we control are our fee wallets, and their activity is public on-chain.</li>
-                <li><strong>We will never add telemetry that includes wallet contents or addresses.</strong> Currently Sentry and Plausible are disabled; if enabled, all payloads are scrubbed of addresses, hashes, and mnemonic-shaped strings before transmission.</li>
-                <li><strong>We will publish the SHA-256 of every release</strong> and pin the SRI hash in the HTML, so users can detect transit and CDN tampering. (The published SHA-256 is what defends against origin tampering, and only if compared against an out-of-band copy.)</li>
+            <ul style="padding-left: 24px; color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 24px;">
+                <li><strong style="color: var(--text);">We will never transmit your mnemonic, seed, or private keys.</strong> If we did, you would see it in DevTools → Network instantly. This is checkable.</li>
+                <li><strong style="color: var(--text);">We will never sign transactions on your behalf.</strong> We can't — we don't have the keys. This is architectural.</li>
+                <li><strong style="color: var(--text);">We will never take custody of your funds.</strong> The only addresses we control are our fee wallets, and their activity is public on-chain.</li>
+                <li><strong style="color: var(--text);">We will never add telemetry that includes wallet contents or addresses.</strong> Currently Sentry and Plausible are disabled; if enabled, all payloads are scrubbed of addresses, hashes, and mnemonic-shaped strings before transmission.</li>
+                <li><strong style="color: var(--text);">We will publish the SHA-256 of every release</strong> and pin the SRI hash in the HTML, so users can detect transit and CDN tampering. (The published SHA-256 is what defends against origin tampering, and only if compared against an out-of-band copy.)</li>
             </ul>
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>If you need source access</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">If you need source access</h2>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 For security researchers, enterprise users, or anyone with a specific need to review
                 the code:
             </p>
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 We can grant read access to the private repository under a standard mutual NDA. Reach
-                out at <a href="mailto:info@poolport.xyz">info@poolport.xyz</a> with a brief
+                out at <a href="mailto:info@poolport.xyz" style="color: var(--accent);">info@poolport.xyz</a> with a brief
                 description of who you are and what you need to review. We've granted access to
                 independent researchers before and are happy to do so again.
             </p>
         </section>
 
         <section style="margin-bottom: 48px;">
-            <h2>The honest summary</h2>
+            <h2 style="font-size: 24px; margin-bottom: 16px;">The honest summary</h2>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 If our reasoning sounds like "we want to protect our business," that's because it is.
                 We're not claiming security through obscurity makes the app safer — it doesn't. We're
                 claiming that publishing the source would cost us more than it costs our users, given
                 that the app's trust properties can be verified independently without it.
             </p>
 
-            <p>
+            <p style="color: var(--text-muted); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">
                 If you disagree with that trade-off, don't use the app. If you want source access for
                 a legitimate reason, ask. We're not trying to be secretive for its own sake.
             </p>
         </section>
 
-        <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 32px; margin-top: 48px;">
-            <p style="color: #8b949e; font-size: 14px;">
+        <div style="border-top: 1px solid var(--border); padding-top: 32px; margin-top: 48px;">
+            <p style="color: var(--text-dim); font-size: 14px;">
                 Questions or disagreement? Email
-                <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
+                <a href="mailto:info@poolport.xyz" style="color: var(--accent);">info@poolport.xyz</a>.
             </p>
         </div>
 
@@ -212,7 +212,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
+                <p>© 2026 PoolPort · <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
             </div>
         </div>
     </footer>
