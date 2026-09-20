@@ -6,9 +6,9 @@
     --border-input: #30363d;
     --text: #e6edf3;
     --muted: #8b949e;
-    --accent: #58a6ff;
-    --primary: #238636;
-    --primary-hover: #2ea043;
+    --accent: #00d4aa;
+    --primary: #00b894;
+    --primary-hover: #00d4aa;
     --danger: #da3633;
     --danger-hover: #f85149;
     --warn: #e3b341;
@@ -38,8 +38,21 @@ a:hover { text-decoration: underline; }
     z-index: 100;
 }
 .nav .wrap { display: flex; justify-content: space-between; align-items: center; }
-.logo { font-weight: 700; font-size: 20px; color: var(--text); }
+.logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--text);
+}
 .logo:hover { text-decoration: none; }
+.brand-mark {
+    width: 22px;
+    height: 22px;
+    color: var(--accent);
+    flex-shrink: 0;
+}
 .nav-links { display: flex; gap: 12px; align-items: center; font-size: 14px; }
 .nav-links a { color: var(--muted); }
 .nav-links a:hover { color: var(--text); text-decoration: none; }
@@ -98,7 +111,7 @@ textarea, input[type=text] {
 textarea:focus, input[type=text]:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+    box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.15);
 }
 textarea { resize: vertical; min-height: 100px; }
 
@@ -271,12 +284,12 @@ pre#run-log:empty::before {
 }
 .bundle-card:hover {
     border-color: var(--accent);
-    background: rgba(88, 166, 255, 0.05);
+    background: rgba(0, 212, 170, 0.05);
     transform: translateY(-1px);
 }
 .bundle-card.featured {
     border-color: var(--primary);
-    background: rgba(35, 134, 54, 0.06);
+    background: rgba(0, 184, 148, 0.06);
 }
 .bundle-badge {
     position: absolute;
@@ -384,7 +397,7 @@ pre#run-log:empty::before {
     align-items: center;
     gap: 12px;
     padding: 16px;
-    background: rgba(88, 166, 255, 0.05);
+    background: rgba(0, 212, 170, 0.05);
     border-radius: 8px;
     margin: 16px 0;
     text-align: center;
@@ -443,8 +456,8 @@ pre#run-log:empty::before {
    ===================================================================== */
 
 .free-claim-banner {
-  background: linear-gradient(135deg, rgba(88,166,255,0.12), rgba(88,166,255,0.06));
-  border: 1px solid rgba(88,166,255,0.35);
+  background: linear-gradient(135deg, rgba(0,212,170,0.12), rgba(0,212,170,0.06));
+  border: 1px solid rgba(0,212,170,0.35);
   border-radius: 10px;
   padding: 16px 20px;
   margin-bottom: 24px;
@@ -481,7 +494,7 @@ pre#run-log:empty::before {
 
 #free-claim-countdown {
   font-family: ui-monospace, monospace;
-  color: #79c0ff;
+  color: #00d4aa;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }

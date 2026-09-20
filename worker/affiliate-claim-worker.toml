@@ -1,11 +1,11 @@
-name = "sweep-affiliate-claim"
+name = "poolport-liquifi-affiliate-claim"
 main = "affiliate-claim-worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 kv_namespaces = [
-  { binding = "CLAIM_STATE", id = "716bb15f18aa48e7a0a483c4467ffcd2" },
-  { binding = "RECEIPTS", id = "2cda434a2d7043a78213fa9c1ae21f9e" }
+  { binding = "CLAIM_STATE", id = "0a8a3da667a44081bd895df493a5e9e5" },
+  { binding = "RECEIPTS", id = "013e4050125b47c7bf8154314711c403" }
 ]
 
 [triggers]

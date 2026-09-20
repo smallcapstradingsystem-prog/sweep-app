@@ -3,15 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security model — Sweeper</title>
-    <meta name="description" content="How Sweeper handles your keys, what it can and cannot do, and how to verify the claims.">
+    <title>Security model — PoolPort LiquiFi</title>
+    <meta name="description" content="How PoolPort LiquiFi handles your keys, what it can and cannot do, and how to verify the claims.">
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">◈ Sweeper</a>
+            <a href="/" class="logo">
+                <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
+                    <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
+                </svg>
+                <span>PoolPort LiquiFi</span>
+            </a>
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
@@ -25,20 +31,20 @@
 
         <h1 style="margin-bottom: 12px;">Security model</h1>
         <p class="lede" style="margin-bottom: 40px;">
-            What Sweeper can do, what it can't do, and how you can verify both yourself.
+            What PoolPort LiquiFi can do, what it can't do, and how you can verify both yourself.
         </p>
 
         <section style="margin-bottom: 48px;">
             <h2>Threat model</h2>
             <p>
-                Sweeper is designed to protect against two classes of risk:
+                PoolPort LiquiFi is designed to protect against two classes of risk:
             </p>
             <ul>
                 <li><strong>Server compromise.</strong> If our servers were breached, an attacker should gain nothing of value — no keys, no funds, no ability to sign.</li>
                 <li><strong>Malicious operator.</strong> Even if we wanted to steal funds, the architecture should make it impossible without detection.</li>
             </ul>
             <p>
-                Sweeper does <strong>not</strong> protect against: a compromised browser extension, malware on your machine, a screen recorder, or a compromised RPC endpoint that returns false data. Those are outside our control.
+                PoolPort LiquiFi does <strong>not</strong> protect against: a compromised browser extension, malware on your machine, a screen recorder, or a compromised RPC endpoint that returns false data. Those are outside our control.
             </p>
         </section>
 
@@ -68,8 +74,8 @@
             </p>
             <ul>
                 <li><strong>Mnemonic mode:</strong> keys are derived in-browser from the pasted phrase using <code>ethers</code>, <code>@solana/web3.js</code>, and <code>bitcoinjs-lib</code>. Signing happens in the same tab.</li>
-                <li><strong>Wallet extension mode:</strong> signing happens in your wallet (MetaMask, Rabby, etc.), which the browser mediates. Sweeper never sees the key.</li>
-                <li><strong>WalletConnect mode:</strong> signing happens on your mobile wallet. Sweeper only relays the unsigned transaction payload.</li>
+                <li><strong>Wallet extension mode:</strong> signing happens in your wallet (MetaMask, Rabby, etc.), which the browser mediates. We never see the key.</li>
+                <li><strong>WalletConnect mode:</strong> signing happens on your mobile wallet. We only relay the unsigned transaction payload.</li>
                 <li><strong>Ledger / Trezor:</strong> signing happens on the hardware device. You see every transaction on the device screen before approving.</li>
             </ul>
             <p>
@@ -81,42 +87,64 @@
         <section style="margin-bottom: 48px;">
             <h2>What the servers do</h2>
             <p>
-                Sweeper runs two Cloudflare Workers:
+                PoolPort LiquiFi runs three Cloudflare Workers:
             </p>
             <ul>
                 <li><strong>RPC proxy</strong> — forwards JSON-RPC calls to Alchemy and Helius so we can hide our API keys. Logs only timestamp, IP, route, and status code. No payload content, ever.</li>
-                <li><strong>Payment worker</strong> — handles credit purchases (Square, crypto), tracks balances keyed by a pseudonymous client ID, and records sweep receipts for our own accounting. Does not receive mnemonic data, private keys, or signed transaction payloads.</li>
+                <li><strong>Payment worker</strong> — handles credit purchases (crypto), tracks balances keyed by a pseudonymous client ID, records sweep receipts for our own accounting, and independently verifies EVM fee receipts against on-chain transfer logs. Does not receive mnemonic data, private keys, or signed transaction payloads.</li>
+                <li><strong>Affiliate claim worker</strong> — periodically claims accumulated deBridge affiliate fees on Solana. Runs on a cron schedule; the manual trigger endpoint requires an operator secret. Only the operator's own Solana key is present on this worker, and it can only withdraw fees accrued to the fee wallet.</li>
             </ul>
             <p>
-                Neither worker can spend funds, sign transactions, or access your keys.
+                None of these workers can spend user funds, sign transactions on a user's behalf, or
+                access user keys.
             </p>
         </section>
 
+        <!-- TONIGHT: rewritten to be accurate. The previous version claimed SRI
+             defends against origin compromise. It does not. SRI defends against
+             transit and CDN tampering. The hash comparison against latest.txt is
+             the check that catches origin tampering, and only if the reader has
+             an independent copy of the hash. -->
         <section style="margin-bottom: 48px;">
             <h2>Release integrity</h2>
             <p>
-                Every build publishes a SHA-256 hash and an SRI hash. The HTML pins the SRI hash on the
-                <code>&lt;script&gt;</code> tag, so the browser refuses to execute <code>app.js</code>
-                if the file's contents have changed since we published it.
+                Every build publishes a SHA-256 hash at
+                <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>.
+                To verify the bundle you're running matches what we published:
+            </p>
+            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
+            <p>
+                The output should match <code>sha256_hex</code> in
+                <code>latest.txt</code>. If it doesn't, do not use the app.
             </p>
             <p>
-                To verify the bundle yourself:
+                The HTML additionally pins a Subresource Integrity (SRI) hash on
+                the script tag, so a tampered <code>app.js</code> arriving from
+                transit or a CDN would be refused by the browser. SRI does
+                <strong>not</strong> protect against a compromise of the origin
+                server itself — an attacker with write access to the origin
+                would update the HTML and the JS together. The
+                <code>curl | openssl</code> comparison above is the check that
+                matters for origin integrity, and it is only meaningful if you
+                compare against a hash you obtained through a channel
+                independent of our server.
             </p>
-            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://sweeper.cloud/app.js | openssl dgst -sha256</code></pre>
             <p>
-                Compare against <code>sha256_hex</code> in
-                <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>. If they match,
-                the bundle is unmodified.
+                In other words: SRI raises the cost of transit and CDN attacks to
+                near zero. Defending against origin compromise requires either
+                trusting us, or obtaining the release hash out of band and
+                comparing it yourself. There is no purely-client-side way to
+                close that gap.
             </p>
         </section>
 
         <section style="margin-bottom: 48px;">
             <h2>Why the source isn't public</h2>
             <p>
-                Sweeper's source is proprietary. This is a trade-off we discuss in detail at
+                PoolPort LiquiFi's source is proprietary. This is a trade-off we discuss in detail at
                 <a href="/private-source.html">/private-source.html</a>. Security researchers can
                 request NDA access to the private repository by emailing
-                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
+                <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
             </p>
         </section>
 
@@ -124,7 +152,7 @@
             <h2>Reporting a vulnerability</h2>
             <p>
                 If you believe you've found a security issue, email
-                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>. Include:
+                <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>. Include:
             </p>
             <ul>
                 <li>A description of the issue</li>
@@ -154,7 +182,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/private-source.html">Source policy</a></p>
+                <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/private-source.html">Source policy</a></p>
             </div>
         </div>
     </footer>

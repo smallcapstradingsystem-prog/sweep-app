@@ -1,9 +1,10 @@
-name = "sweep-payment"
+name = "poolport-liquifi"
 main = "payment-worker.js"
 compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
 kv_namespaces = [
-  { binding = "CREDITS", id = "1a595b317bd54c048a4b4e9563e798bc" },
-  { binding = "PENDING_PAYMENTS", id = "b74907f1831c41bdb992a561cdf7b8e1" },
-  { binding = "RECEIPTS", id = "2cda434a2d7043a78213fa9c1ae21f9e" }
+  { binding = "CREDITS", id = "dbce7fee39a04e1191e2337e8533ce13" },
+  { binding = "PENDING_PAYMENTS", id = "523b202a4d764d0f8b96c7dc367cd495" },
+  { binding = "RECEIPTS", id = "013e4050125b47c7bf8154314711c403" }
 ]

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Guide — How to use Sweeper</title>
-    <meta name="description" content="Step-by-step guide to using Sweeper: pick a wallet source, preview balances, buy a credit, and sweep your wallets into USDC.">
+    <title>Guide — How to use PoolPort LiquiFi</title>
+    <meta name="description" content="Step-by-step guide to using PoolPort LiquiFi: pick a wallet source, preview balances, buy credits, and sweep your wallets into USDC.">
     <meta name="theme-color" content="#0a0e1a">
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
@@ -58,11 +58,11 @@
             border-radius: 4px;
             font-family: ui-monospace, monospace;
             font-size: 14px;
-            color: #79c0ff;
+            color: #00d4aa;
         }
 
         .guide-callout {
-            background: rgba(88, 166, 255, 0.08);
+            background: rgba(0, 212, 170, 0.08);
             border-left: 3px solid var(--accent);
             padding: 16px 20px;
             border-radius: 4px;
@@ -132,7 +132,13 @@
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">◈ Sweeper</a>
+            <a href="/" class="logo">
+                <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
+                    <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
+                </svg>
+                <span>PoolPort LiquiFi</span>
+            </a>
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
@@ -144,7 +150,7 @@
     <main class="guide">
         <a href="/app.html" class="back-link">← Back to app</a>
 
-        <h1>How to use Sweeper</h1>
+        <h1>How to use PoolPort LiquiFi</h1>
         <p class="subtitle">
             A complete walkthrough — from picking a wallet source to receiving USDC at your destination.
         </p>
@@ -157,7 +163,7 @@
                 <li><a href="#destination">Setting a destination</a></li>
                 <li><a href="#chains">Selecting chains and families</a></li>
                 <li><a href="#preview">Running a preview</a></li>
-                <li><a href="#credit">Buying a credit</a></li>
+                <li><a href="#credit">Buying credits</a></li>
                 <li><a href="#live">Running a live sweep</a></li>
                 <li><a href="#troubleshooting">Troubleshooting</a></li>
                 <li><a href="#safety">Safety notes</a></li>
@@ -166,24 +172,25 @@
 
         <h2 id="overview">1. Overview</h2>
         <p>
-            Sweeper finds every token in your wallets across multiple chains, swaps them
+            PoolPort LiquiFi finds every token in your wallets across multiple chains, swaps them
             all into USDC, and sends the USDC to a destination address you choose. It runs
             entirely in your browser — your keys never leave your device.
         </p>
         <p>The workflow has three stages:</p>
         <ol>
             <li><strong>Preview</strong> — the app derives your wallet addresses and shows you what's in each one. Nothing is signed, nothing is broadcast. Free, unlimited.</li>
-            <li><strong>Buy a credit</strong> — one credit = one live sweep. You pay in crypto (USDC, ETH, SOL, or BTC). Credits never expire.</li>
-            <li><strong>Execute</strong> — the app swaps every token to USDC and sends the USDC to the destination address you chose. Every transaction is signed locally.</li>
+            <li><strong>Buy credits</strong> — one credit = one wallet swept. If you sweep 5 mnemonics in one run, that's 5 credits. You pay in crypto (USDC, ETH, SOL, or BTC). Credits never expire.</li>
+            <li><strong>Execute</strong> — the app swaps every token to USDC and sends the USDC to the destination address you chose. Every transaction is signed locally. Gas is sponsored for wallets that need it.</li>
         </ol>
 
         <div class="guide-callout">
-            <strong>Tip:</strong> Always run a preview first. It takes a few seconds and tells you
-            exactly what the app will do — before you commit a credit.
+            <strong>Tip:</strong> Always run a preview first. It takes a few seconds, tells you
+            exactly what the app will do, and tells you how many credits the sweep will cost
+            — before you commit anything.
         </div>
 
         <h2 id="wallet-source">2. Choosing a wallet source</h2>
-        <p>Sweeper supports five wallet sources. Pick whichever matches how you hold your keys.</p>
+        <p>PoolPort LiquiFi supports five wallet sources. Pick whichever matches how you hold your keys.</p>
 
         <h3>Browser extension (recommended for desktop)</h3>
         <p>
@@ -193,6 +200,7 @@
         <ul>
             <li><strong>Best for:</strong> users with a browser wallet already installed</li>
             <li><strong>Chains:</strong> EVM only (Ethereum, Arbitrum, Optimism, Base, Polygon, BNB)</li>
+            <li><strong>Credits:</strong> 1 credit for the connected wallet</li>
             <li><strong>Note:</strong> MetaMask, Rabby, and Coinbase Wallet handle multi-chain switching
                 reliably. Phantom and some others only support one chain at a time.</li>
         </ul>
@@ -205,6 +213,7 @@
         <ul>
             <li><strong>Best for:</strong> users who hold keys on a phone</li>
             <li><strong>Chains:</strong> EVM only</li>
+            <li><strong>Credits:</strong> 1 credit for the connected wallet</li>
             <li><strong>Note:</strong> you approve each transaction on your phone</li>
         </ul>
 
@@ -217,6 +226,7 @@
         <ul>
             <li><strong>Best for:</strong> sweeping wallets across EVM + Solana + Bitcoin, or when you don't want to sign dozens of popups</li>
             <li><strong>Chains:</strong> everything</li>
+            <li><strong>Credits:</strong> 1 credit per mnemonic. Paste 5 phrases, sweep 5 mnemonics → 5 credits.</li>
             <li><strong>Security:</strong> the phrases never leave your browser. Verify with DevTools → Network before entering anything.</li>
         </ul>
 
@@ -262,6 +272,10 @@
             Check only the chains you want to sweep. Fewer chains = faster preview and
             fewer transactions. Uncheck everything except one chain for a focused test.
         </p>
+        <p>
+            <strong>Credit cost does not change with chain count.</strong> One wallet = one
+            credit, whether you sweep one chain or all six.
+        </p>
 
         <h2 id="preview">5. Running a preview</h2>
         <p>Click <strong>Preview</strong>. The app will:</p>
@@ -269,7 +283,7 @@
             <li>Derive addresses from each mnemonic (or read the connected wallet's address)</li>
             <li>Query balances for every chain you selected</li>
             <li>Discover every token with a non-zero balance</li>
-            <li>Report what it found in the output log</li>
+            <li>Report what it found in the output log, including how many credits the live sweep will cost</li>
         </ol>
         <p>
             Nothing is signed. Nothing is broadcast. Preview is completely free and you
@@ -288,21 +302,24 @@
             untouched — that's correct behavior.
         </div>
 
-        <h2 id="credit">6. Buying a credit</h2>
+        <h2 id="credit">6. Buying credits</h2>
         <p>
-            One credit = one live sweep, regardless of how many wallets or chains you
-            include. Prices:
+            <strong>One credit = one wallet swept.</strong> A wallet is one mnemonic
+            (spanning all its EVM, Solana, and Bitcoin addresses) or one connected
+            wallet. Sweeping 5 mnemonics costs 5 credits, regardless of how many
+            chains or tokens are involved.
         </p>
+        <p>Prices:</p>
         <ul>
             <li>1 credit — $10</li>
-            <li>5 credits — $20</li>
-            <li>10 credits — $40</li>
-            <li>25 credits — $80</li>
-            <li>50 credits — $150</li>
+            <li>5 credits — $20 ($4.00 per wallet)</li>
+            <li>10 credits — $40 ($4.00 per wallet)</li>
+            <li>25 credits — $80 ($3.20 per wallet)</li>
+            <li>50 credits — $150 ($3.00 per wallet)</li>
         </ul>
         <p>To buy:</p>
         <ol>
-            <li>Click <strong>Buy credits</strong> in the top nav</li>
+            <li>Click <strong>Buy credits</strong> in the top nav, or just click Run in live mode — if you're short on credits, the app opens the buy modal automatically with a suggestion that covers the gap.</li>
             <li>Pick a bundle</li>
             <li>Pick a payment method: USDC on Base (cheapest), USDC on Ethereum, ETH on Base, SOL, or BTC</li>
             <li>Send the exact amount shown to the address shown</li>
@@ -316,23 +333,35 @@
         </div>
 
         <h2 id="live">7. Running a live sweep</h2>
-        <p>Once you have credits, switch to <strong>Live</strong> mode and click <strong>Run</strong>.</p>
-        <p>You'll be asked to type <code>LIVE_SWEEP_NOW</code> as a final confirmation.</p>
+        <p>
+            Once you have credits, switch to <strong>Live</strong> mode and click
+            <strong>Run</strong>. There is no confirmation dialog — the button
+            executes immediately.
+        </p>
+        <p>
+            <strong>Before you click:</strong> make sure the destination is correct and
+            the preview reflects what you expect. Live means live.
+        </p>
         <p>What happens next:</p>
         <ol>
-            <li>One credit is consumed</li>
-            <li>For each wallet and chain, the app:
+            <li>The app checks your balance. If you don't have enough credits for every wallet in the run, it opens the buy modal with a suggested bundle to cover the gap. Cancel the modal and nothing runs, nothing is consumed.</li>
+            <li>For each wallet in sequence:
                 <ul>
-                    <li>Transfers any existing USDC to the destination you chose</li>
-                    <li>Approves the swap contract to spend each token (one-time per token)</li>
-                    <li>Simulates the swap to verify it will succeed</li>
-                    <li>Executes the swap, sending 90% of the USDC directly to your destination and 10% to the service fee wallet — both in the same transaction</li>
+                    <li>One credit is consumed for that wallet</li>
+                    <li>Gas is sponsored automatically if the wallet doesn't have enough native token</li>
+                    <li>Existing USDC is transferred directly to your destination (no fee)</li>
+                    <li>Other tokens are approved and swapped: 90% of the USDC goes to your destination, 10% to the service fee wallet, in the same transaction</li>
+                    <li>Native tokens (ETH/BNB/POL) are wrapped and swapped, with a reserve kept for gas</li>
+                    <li>Solana and Bitcoin sweeps bridge to Ethereum USDC at your destination</li>
                 </ul>
             </li>
-            <li>Native tokens (ETH/BNB/POL) are wrapped and swapped, with a reserve kept back for gas</li>
-            <li>Solana and Bitcoin sweeps bridge to Ethereum USDC at your destination</li>
-            <li>Once all chains finish, the sweep is complete</li>
+            <li>After the last wallet finishes, the sweep is complete.</li>
         </ol>
+        <p>
+            <strong>If a wallet fails mid-run</strong> (network drops, RPC goes down), the
+            app stops. The wallets that already ran keep their consumption; the ones
+            that didn't run keep their credits.
+        </p>
         <p>The log shows one line per token:</p>
         <ul>
             <li><code>SUCCESS 0x...</code> — swapped, USDC sent to destination</li>
@@ -343,17 +372,25 @@
         <div class="guide-callout">
             <strong>About the 10% fee:</strong> the fee is taken at swap time by the
             underlying routing protocol (0x on EVM, deBridge on Solana, THORChain on
-            Bitcoin) — never held by Sweeper. You receive 90% of the swept value
+            Bitcoin) — never held by us. You receive 90% of the swept value
             directly at your destination, in the same transaction. There is no manual
             forwarding step.
+        </div>
+        <div class="guide-callout">
+            <strong>About gas:</strong> we sponsor native gas automatically for
+            EVM wallets that need it to run the sweep. You don't have to pre-fund
+            your wallets. Solana source wallets still need a small SOL balance to
+            cover the deBridge order fee, and Bitcoin network fees are deducted from
+            the swept UTXOs.
         </div>
 
         <h2 id="troubleshooting">8. Troubleshooting</h2>
 
-        <h3>"No credits available"</h3>
+        <h3>"You need N more credits to continue this sweep"</h3>
         <p>
-            You need a credit to run a live sweep. Preview and dry runs are free —
-            only live sweeps consume credits.
+            Your balance is lower than the number of wallets in this run. The app
+            opens the buy modal automatically. Buy the suggested bundle and the
+            sweep resumes; cancel and nothing runs.
         </p>
 
         <h3>"The Provider is not connected to the requested chain"</h3>
@@ -366,8 +403,9 @@
 
         <h3>"USDC transfer: insufficient gas"</h3>
         <p>
-            The wallet doesn't have enough native token (ETH, BNB, POL) to pay for the
-            transaction. Send a small amount to the sweep wallet and try again.
+            Even with sponsorship, extremely congested networks can under-provide gas
+            for the initial transaction. Wait a minute and retry, or top up the
+            wallet with a small amount of native token.
         </p>
 
         <h3>Token shows as "no route" or "skipped"</h3>
@@ -384,10 +422,11 @@
             5 minutes, verify the amount you sent matches what was shown.
         </p>
 
-        <h3>Solana sweep skipped for "needs ~0.03 SOL"</h3>
+        <h3>Solana sweep skipped for "needs ~0.025 SOL"</h3>
         <p>
-            The Solana wallet doesn't have enough native SOL to pay for the deBridge order
-            fee. Top it up and try again.
+            The Solana wallet doesn't have enough native SOL to cover the
+            transaction fee, the account rent reserve, and the deBridge order
+            fee. The threshold is 0.025 SOL. Top it up and try again.
         </p>
 
         <h3>Bitcoin sweep skipped for "below THORChain minimum"</h3>
@@ -404,12 +443,18 @@
             </li>
             <li>
                 <strong>Run a dry run first.</strong> It's free and takes seconds. It
-                shows you exactly what the live sweep will do.
+                shows you exactly what the live sweep will do, and how many credits
+                it will cost.
             </li>
             <li>
-                <strong>Keep enough native gas.</strong> Every sweep wallet needs ETH,
-                BNB, or POL to pay for transactions. Solana needs SOL. Bitcoin deducts
-                the network fee from the swept UTXOs.
+                <strong>Live runs immediately.</strong> There is no confirmation
+                dialog on live sweep. Double-check the destination and mode before
+                clicking.
+            </li>
+            <li>
+                <strong>Solana needs a small SOL buffer.</strong> The app doesn't
+                sponsor Solana gas. Bitcoin network fees are deducted from the swept
+                UTXOs. EVM gas is sponsored automatically.
             </li>
             <li>
                 <strong>Use a clean browser profile.</strong> Malicious browser extensions
@@ -427,9 +472,10 @@
             </li>
             <li>
                 <strong>Verify the release bundle.</strong> Each build publishes a SHA-256
-                hash and pins an SRI hash in the HTML. If the bundle ever changes without
-                a matching hash, the browser refuses to load it. See
-                <a href="/private-source.html">the source policy</a> for details.
+                hash at <code>/releases/latest.txt</code>. Compare it against
+                <code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code>.
+                See <a href="/security-policy.html">the security model</a> for what SRI
+                does and doesn't protect against.
             </li>
         </ul>
 
@@ -438,7 +484,7 @@
             additional questions. For security specifics, see
             <a href="/security-policy.html">the security model</a> and
             <a href="/private-source.html">the source policy</a>. Report issues to
-            <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
+            <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
         </div>
 
         <p style="margin-top: 60px; text-align: center;">
@@ -450,7 +496,13 @@
         <div class="wrap">
             <div class="footer-grid">
                 <div>
-                    <div class="logo">◈ Sweeper</div>
+                    <div class="logo">
+                        <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
+                            <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
+                        </svg>
+                        <span>PoolPort LiquiFi</span>
+                    </div>
                     <p class="footer-tag">Non-custodial wallet consolidation.</p>
                 </div>
                 <div>
@@ -478,7 +530,7 @@
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. All rights reserved. Provided as-is, no warranty.</p>
+                <p>© 2026 PoolPort. All rights reserved. Provided as-is, no warranty.</p>
             </div>
         </div>
     </footer>

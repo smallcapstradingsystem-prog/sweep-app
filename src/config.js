@@ -1,5 +1,5 @@
 /**
- * config.js — Static configuration for Sweeper.
+ * config.js — Static configuration for PoolPort LiquiFi.
  */
 
 // =====================================================================
@@ -60,7 +60,7 @@ export const MAX_SPONSOR_ATTEMPTS = 5;
 // =====================================================================
 //
 // NOTE: In the direct-to-user model, the 10% fee is taken at swap time
-// by 0x / deBridge / THORChain — never by Sweeper. These helpers are
+// by 0x / deBridge / THORChain — never by us. These helpers are
 // retained for backwards compatibility with code paths that still
 // compute user-share arithmetically (dry-run estimates, receipts that
 // predate the atomic split).

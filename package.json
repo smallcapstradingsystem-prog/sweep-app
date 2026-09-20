@@ -1,8 +1,8 @@
 {
-  "name": "sweep-app",
+  "name": "poolport-liquifi",
   "version": "1.0.0",
   "private": false,
-  "description": "Non-custodial cross-chain wallet sweeper. Pay per sweep.",
+  "description": "Non-custodial cross-chain wallet consolidation. Pay per sweep.",
   "license": "MIT",
   "type": "module",
   "scripts": {

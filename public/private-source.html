@@ -3,15 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Why the source is private — Sweeper</title>
-    <meta name="description" content="Why Sweeper's source code is not public, and how we compensate for the loss of auditability.">
+    <title>Why the source is private — PoolPort LiquiFi</title>
+    <meta name="description" content="Why PoolPort LiquiFi's source code is not public, and how we compensate for the loss of auditability.">
     <link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="marketing.css">
 </head>
 <body>
     <nav class="nav">
         <div class="wrap">
-            <a href="/" class="logo">◈ Sweeper</a>
+            <a href="/" class="logo">
+                <svg class="brand-mark" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="1" y="1" width="20" height="20" rx="5" fill="currentColor"/>
+                    <rect x="11" y="1" width="10" height="10" rx="0" fill="var(--bg)"/>
+                </svg>
+                <span>PoolPort LiquiFi</span>
+            </a>
             <div class="nav-links">
                 <a href="/">Home</a>
                 <a href="/guide.html">Guide</a>
@@ -31,7 +37,7 @@
         <section style="margin-bottom: 48px;">
             <h2>The short version</h2>
             <p>
-                Sweeper's source code is not public. This is a deliberate choice, not an oversight.
+                PoolPort LiquiFi's source code is not public. This is a deliberate choice, not an oversight.
                 We recognize that it removes a common way for users to verify what they're running.
                 This page explains why we made the choice, what we're doing to compensate, and what
                 you can still verify yourself.
@@ -43,7 +49,7 @@
 
             <p><strong>1. The fee and routing logic is the product.</strong></p>
             <p>
-                The interesting engineering in Sweeper is not "call a DEX." It's the specific routing
+                The interesting engineering in PoolPort LiquiFi is not "call a DEX." It's the specific routing
                 decisions across six EVM chains, Solana, and Bitcoin — which swap path to take, when to
                 skip a token, how to handle dust, how fee collection is structured. That logic took real
                 work to get right. Publishing it hands competitors a free blueprint, and there are
@@ -81,7 +87,7 @@
             </ul>
 
             <p>
-                Those are real losses. If any of them are non-negotiable for you, don't use Sweeper.
+                Those are real losses. If any of them are non-negotiable for you, don't use PoolPort LiquiFi.
                 That's a fair decision, and we respect it.
             </p>
         </section>
@@ -97,17 +103,36 @@
                 key, or any signed transaction data beyond what's broadcast on-chain.
             </p>
 
+            <!-- TONIGHT: rewritten. The previous version claimed SRI defended
+                 against origin compromise, which is not true — an attacker with
+                 origin write access updates the HTML and the JS together. SRI
+                 defends against transit and CDN tampering. The curl | openssl
+                 comparison against latest.txt is the check that catches origin
+                 tampering, and only if the user has an independently-known-good
+                 copy of the hash to compare against. -->
             <p><strong>2. The bundle you're running matches what we published.</strong></p>
             <p>
-                Every release publishes a SHA-256 hash and a Subresource Integrity (SRI) hash at
-                <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>. The HTML loads
-                <code>app.js</code> with that SRI hash pinned — if the file on our server ever changes,
-                your browser refuses to load it. You can verify the hash yourself:
+                Every release publishes a SHA-256 hash at
+                <a href="/releases/latest.txt"><code>/releases/latest.txt</code></a>.
+                You can verify the bundle you actually received matches it:
             </p>
-            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://sweeper.cloud/app.js | openssl dgst -sha256</code></pre>
+            <pre style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px;"><code>curl -s https://liquifi.poolport.xyz/app.js | openssl dgst -sha256</code></pre>
             <p>
-                The output should match the <code>sha256_hex</code> in <code>latest.txt</code>. If it
-                doesn't, something is wrong and you should not use the app.
+                The output should match the <code>sha256_hex</code> in
+                <code>latest.txt</code>. If it doesn't, something is wrong and you
+                should not use the app.
+            </p>
+            <p>
+                The HTML also pins a Subresource Integrity (SRI) hash on the
+                <code>&lt;script&gt;</code> tag. This defends against tampering in
+                transit or by a third-party CDN — if an intermediary alters
+                <code>app.js</code> between our server and your browser, the
+                browser refuses to run it. It does <strong>not</strong> defend
+                against a compromise of our origin server, because an attacker
+                with origin write access could alter the HTML and the JS together.
+                The <code>curl | openssl</code> check above is the authoritative
+                verification, and it only helps if you compare against a hash
+                you obtained independently of our server.
             </p>
 
             <p><strong>3. Every signature is yours, on your device.</strong></p>
@@ -139,8 +164,8 @@
                 <li><strong>We will never transmit your mnemonic, seed, or private keys.</strong> If we did, you would see it in DevTools → Network instantly. This is checkable.</li>
                 <li><strong>We will never sign transactions on your behalf.</strong> We can't — we don't have the keys. This is architectural.</li>
                 <li><strong>We will never take custody of your funds.</strong> The only addresses we control are our fee wallets, and their activity is public on-chain.</li>
-                <li><strong>We will never add telemetry that includes wallet contents or addresses.</strong> Currently Sentry and Plausible are disabled; if enabled, all payloads are scrubbed of addresses and hashes before transmission.</li>
-                <li><strong>We will publish the SHA-256 of every release</strong> and pin the SRI hash in the HTML, so users can detect any tampering after the fact.</li>
+                <li><strong>We will never add telemetry that includes wallet contents or addresses.</strong> Currently Sentry and Plausible are disabled; if enabled, all payloads are scrubbed of addresses, hashes, and mnemonic-shaped strings before transmission.</li>
+                <li><strong>We will publish the SHA-256 of every release</strong> and pin the SRI hash in the HTML, so users can detect transit and CDN tampering. (The published SHA-256 is what defends against origin tampering, and only if compared against an out-of-band copy.)</li>
             </ul>
         </section>
 
@@ -153,7 +178,7 @@
             </p>
             <p>
                 We can grant read access to the private repository under a standard mutual NDA. Reach
-                out at <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a> with a brief
+                out at <a href="mailto:info@poolport.xyz">info@poolport.xyz</a> with a brief
                 description of who you are and what you need to review. We've granted access to
                 independent researchers before and are happy to do so again.
             </p>
@@ -178,7 +203,7 @@
         <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 32px; margin-top: 48px;">
             <p style="color: #8b949e; font-size: 14px;">
                 Questions or disagreement? Email
-                <a href="mailto:security@sweeper.cloud">security@sweeper.cloud</a>.
+                <a href="mailto:info@poolport.xyz">info@poolport.xyz</a>.
             </p>
         </div>
 
@@ -187,7 +212,7 @@
     <footer class="footer">
         <div class="wrap">
             <div class="footer-bottom">
-                <p>© 2026 Sweeper Labs. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
+                <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
             </div>
         </div>
     </footer>

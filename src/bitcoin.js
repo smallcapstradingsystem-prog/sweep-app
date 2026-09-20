@@ -8,30 +8,19 @@ const THORCHAIN_QUOTE_API = 'https://swap.thorchain.org/api/v1/quote';
 const BTC_ASSET = 'BTC.BTC';
 const ETH_USDC_ASSET = 'ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48';
 
-// =====================================================================
-// AFFILIATE (THORName)
-// =====================================================================
-//
-// THORChain affiliate fees require a registered THORName. Raw addresses
-// are not accepted. Register at https://dev.thorchain.org/thornames/.
-//
-// Set THOR_AFFILIATE_NAME to your registered name and set its
-// preferred asset to ETH.USDC so fees auto-convert and pay out.
-//
-// If THOR_AFFILIATE_NAME is empty, no affiliate fee is included and
-// the user receives 100% of the swap output.
-// =====================================================================
-
 const THOR_AFFILIATE_NAME = 'sweep25';
 const THOR_AFFILIATE_BPS  = 1000;   // 10%
 
-// Affiliate fee as a fraction of the user's net output.
-// 10% of gross = 1/9 of net.
 const AFFILIATE_FEE_NUMERATOR   = 1000n;
 const AFFILIATE_FEE_DENOMINATOR = 9000n;
 
 const MIN_SEND_SATS = 10000;
-const FALLBACK_FEE_RATE = 2;
+
+// Fallback fee rate when mempool.space is unreachable or slow. Bumped
+// from 2 to 5 sat/vB — 2 was often below the mempool floor during
+// moderate congestion and txs would sit for hours.
+const FALLBACK_FEE_RATE = 5;
+
 const FEE_CACHE_MS = 60 * 1000;
 
 let _cachedFeeRate = null;
@@ -164,8 +153,6 @@ export async function sweepBitcoin(address, keyPair, opts = {}) {
     results.memo = quote.memo;
     results.amountRaw = String(sendToThorchain);
 
-    // THORChain's expected_amount_out already has the affiliate fee
-    // deducted. The user receives that amount. The fee is 1/9 of it.
     const userOut = BigInt(quote.expected_amount_out || '0');
     const feeOut = (userOut * AFFILIATE_FEE_NUMERATOR) / AFFILIATE_FEE_DENOMINATOR;
     results.expectedUsdcOut = userOut.toString();

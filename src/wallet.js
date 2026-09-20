@@ -1,5 +1,16 @@
 /**
  * wallet.js — Signing backends: mnemonic, WalletConnect, Ledger, Trezor, Browser Extension.
+ *
+ * All EVM-capable backends expose a `switchChain(chainId)` method and a
+ * `getCurrentChainId()` method. switchChain asks the wallet to move to
+ * the target chain; getCurrentChainId reports what the wallet says it's
+ * on now. Callers should switch, then verify, then sign — never trust
+ * that switchChain alone did the right thing.
+ *
+ * Backends that don't have a chain concept (mnemonic, hardware wallets)
+ * return null from getCurrentChainId. switchAndVerifyChain treats that
+ * as "no verification possible" and lets the sweep proceed — those
+ * backends sign whatever chainId is on the tx they're given.
  */
 
 import { ethers } from 'ethers';
@@ -24,8 +35,116 @@ function normalizeV(rawV) {
   const v = typeof rawV === 'string' ? parseInt(rawV, 16) : Number(rawV);
   if (v === 0 || v === 1) return v;
   if (v === 27 || v === 28) return v - 27;
-  if (v === 25 || v === 26) return v - 25;  // some Ledger firmware
+  if (v === 25 || v === 26) return v - 25;
   throw new Error(`Unexpected signature v value: ${v} (raw: ${rawV})`);
+}
+
+function noopSwitchChain() {
+  return { ok: true, chainId: null };
+}
+
+/**
+ * Ask an EVM-capable backend to switch to `targetChainId`, retrying a
+ * few times, and verify by reading the provider's reported chain.
+ *
+ * Returns:
+ *   { ok: true,  chainId: <number> }  — verified on target chain
+ *   { ok: true,  chainId: null }      — backend has no chain concept;
+ *                                       caller should proceed, signer
+ *                                       will use the tx's chainId
+ *   { ok: false, chainId: <number|null>, reason: <string> }
+ *
+ * The retry loop is small — 3 attempts at 400ms — because a failure
+ * here almost always means the user declined the prompt, not a
+ * transient network issue. We retry just enough to survive a stale
+ * session and then give up cleanly.
+ */
+export async function switchAndVerifyChain(backend, targetChainId, logLine) {
+  const target = Number(targetChainId);
+  const maxAttempts = 3;
+  const retryDelayMs = 400;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let switchResult;
+    try {
+      switchResult = await backend.switchChain(target);
+    } catch (e) {
+      if (logLine) {
+        logLine(`  switchChain attempt ${attempt}/${maxAttempts} threw: ${e.message}`);
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+        continue;
+      }
+      return { ok: false, reason: e.message, chainId: null };
+    }
+
+    // Some backends return { ok: false } instead of throwing.
+    if (switchResult && switchResult.ok === false) {
+      if (logLine) {
+        logLine(`  switchChain attempt ${attempt}/${maxAttempts} rejected: ${switchResult.reason || 'unknown'}`);
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+        continue;
+      }
+      return { ok: false, reason: switchResult.reason || 'rejected', chainId: null };
+    }
+
+    // Read what the wallet actually thinks its chain is.
+    let observed;
+    try {
+      observed = await backend.getCurrentChainId();
+    } catch (e) {
+      if (logLine) {
+        logLine(`  getCurrentChainId attempt ${attempt}/${maxAttempts} failed: ${e.message}`);
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+        continue;
+      }
+      return { ok: false, reason: `could not read chain: ${e.message}`, chainId: null };
+    }
+
+    // ─── Fix ───
+    //
+    // A null from getCurrentChainId means the backend has no chain
+    // concept — the switch was a no-op and the signer will use the
+    // chainId on the tx. Nothing to verify, proceed. This covers
+    // MnemonicWallet, LedgerBackend, and TrezorBackend.
+    if (observed === null) {
+      return { ok: true, chainId: null };
+    }
+
+    if (observed === target) {
+      return { ok: true, chainId: observed };
+    }
+
+    if (logLine) {
+      logLine(`  Wallet reports chain ${observed}, expected ${target} (attempt ${attempt}/${maxAttempts})`);
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+    }
+  }
+
+  // Final verification read — one last chance before giving up.
+  let observed = null;
+  try {
+    observed = await backend.getCurrentChainId();
+  } catch { /* ignore */ }
+
+  // If we somehow end up here with a null (backend changed mid-run),
+  // treat it as the no-chain-concept case rather than a failure.
+  if (observed === null) {
+    return { ok: true, chainId: null };
+  }
+
+  return {
+    ok: false,
+    reason: `wallet on chain ${observed ?? 'unknown'}, expected ${target}`,
+    chainId: observed,
+  };
 }
 
 // =====================================================================
@@ -60,6 +179,14 @@ export class MnemonicWallet {
     return this._bitcoin.keyPair;
   }
 
+  async switchChain(_targetChainId) {
+    return noopSwitchChain();
+  }
+
+  async getCurrentChainId() {
+    return null;
+  }
+
   async dispose() {
     this.phrase = null;
     this._evm = null;
@@ -69,23 +196,13 @@ export class MnemonicWallet {
 }
 
 // =====================================================================
-// BROWSER EXTENSION BACKEND (MetaMask, Rabby, Coinbase, etc.)
-// =====================================================================
-//
-// Uses the injected `window.ethereum` provider. Works with any wallet
-// that follows the EIP-1193 standard: MetaMask, Rabby, Coinbase Wallet,
-// Brave Wallet, Frame, etc.
-//
-// Limitations:
-//   - EVM chains only (Solana/Bitcoin still require a mnemonic)
-//   - The user must approve every transaction in the extension popup
-//   - If the extension is on the wrong chain, we ask it to switch
+// BROWSER EXTENSION BACKEND
 // =====================================================================
 
 export class BrowserExtensionBackend {
   constructor(ethersProvider, rawProvider, address, chainId) {
-    this.provider = ethersProvider;      // ethers.BrowserProvider wrapping window.ethereum
-    this.rawProvider = rawProvider;      // the raw EIP-1193 provider (window.ethereum)
+    this.provider = ethersProvider;
+    this.rawProvider = rawProvider;
     this.address = address;
     this.chainId = chainId;
   }
@@ -94,15 +211,6 @@ export class BrowserExtensionBackend {
     return this.address;
   }
 
-  /**
-   * Return a signer for the requested chain.
-   *
-   * The `_provider` argument (the target chain's JsonRpcProvider) is
-   * deliberately ignored: browser extensions sign through their own
-   * provider, which is a live wrapper that always reflects the wallet's
-   * current chain. We just need to make sure the wallet is on the right
-   * chain before calling this (see `switchChain`).
-   */
   async getEthersSigner(_provider) {
     return this.provider.getSigner();
   }
@@ -115,32 +223,64 @@ export class BrowserExtensionBackend {
     throw new Error('Browser extensions do not support Bitcoin in this build');
   }
 
-  /**
-   * Ask the extension to switch to a specific chain.
-   * Called by the sweep code before each chain's transactions.
-   */
   async switchChain(chainId) {
-    const hex = '0x' + Number(chainId).toString(16);
-    if (this.chainId === Number(chainId)) return true;
+    const target = Number(chainId);
+    const hex = '0x' + target.toString(16);
+
+    if (this.chainId === target) {
+      try {
+        const reported = await this.getCurrentChainId();
+        if (reported === target) {
+          return { ok: true, chainId: reported };
+        }
+      } catch {
+        // Fall through to the real switch.
+      }
+    }
+
     try {
       await this.rawProvider.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: hex }],
       });
-      this.chainId = Number(chainId);
-      return true;
     } catch (e) {
-      // 4902 = chain not added to the wallet
       if (e.code === 4902 || (e.message && e.message.includes('Unrecognized chain ID'))) {
-        throw new Error(`Wallet does not have chain ${chainId} configured. Add it to the wallet and try again.`);
+        return {
+          ok: false,
+          reason: `wallet does not have chain ${target} configured`,
+        };
       }
-      throw e;
+      return { ok: false, reason: e.message || 'switch rejected' };
     }
+
+    let observed = null;
+    try {
+      observed = await this.getCurrentChainId();
+    } catch (e) {
+      return { ok: false, reason: `could not read chain after switch: ${e.message}` };
+    }
+
+    if (observed !== null) {
+      this.chainId = observed;
+    }
+
+    if (observed !== target) {
+      return {
+        ok: false,
+        reason: `wallet reports chain ${observed}, expected ${target}`,
+        chainId: observed,
+      };
+    }
+
+    return { ok: true, chainId: observed };
+  }
+
+  async getCurrentChainId() {
+    const hex = await this.rawProvider.request({ method: 'eth_chainId' });
+    return parseInt(hex, 16);
   }
 
   async dispose() {
-    // Browser extensions don't have a "disconnect" concept — the user
-    // just closes the popup or revokes the site's access manually.
   }
 }
 
@@ -153,26 +293,20 @@ export async function connectBrowserExtension() {
 
   const raw = window.ethereum;
 
-  // Handle multiple providers (e.g. both MetaMask and Coinbase installed).
-  // EIP-6963 wallets announce themselves via `providers`; we prefer MetaMask.
-  // If `providers` is missing or empty, use the raw provider directly.
   let target = raw;
   if (Array.isArray(raw.providers) && raw.providers.length > 0) {
     target = raw.providers.find((p) => p.isMetaMask) || raw.providers[0];
   }
 
-  // Request accounts — this triggers the popup
   const accounts = await target.request({ method: 'eth_requestAccounts' });
   if (!accounts || accounts.length === 0) {
     throw new Error('No accounts returned by the browser wallet');
   }
   const address = accounts[0];
 
-  // Read current chain
   const chainIdHex = await target.request({ method: 'eth_chainId' });
   const chainId = parseInt(chainIdHex, 16);
 
-  // Wrap in ethers
   const ethersProvider = new ethers.BrowserProvider(target);
 
   return new BrowserExtensionBackend(ethersProvider, target, address, chainId);
@@ -185,6 +319,7 @@ export async function connectBrowserExtension() {
 export class WalletConnectBackend {
   constructor(provider, address, chainId) {
     this.provider = provider;
+    this.rawProvider = provider.provider || provider;
     this.address = address;
     this.chainId = chainId;
   }
@@ -205,11 +340,116 @@ export class WalletConnectBackend {
     throw new Error('WalletConnect does not support Bitcoin in this build');
   }
 
+  async switchChain(chainId) {
+    const target = Number(chainId);
+    const hex = '0x' + target.toString(16);
+
+    if (this.chainId === target) {
+      try {
+        const reported = await this.getCurrentChainId();
+        if (reported === target) {
+          this.chainId = reported;
+          return { ok: true, chainId: reported };
+        }
+      } catch {
+        // fall through
+      }
+    }
+
+    const raw = this.rawProvider;
+    if (!raw || typeof raw.request !== 'function') {
+      return { ok: false, reason: 'WalletConnect provider not available' };
+    }
+
+    try {
+      await raw.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: hex }],
+      });
+    } catch (e) {
+      if (e.code === 4902 || (e.message && e.message.includes('Unrecognized chain ID'))) {
+        try {
+          await raw.request({
+            method: 'wallet_addEthereumChain',
+            params: [chainParamsFor(target)],
+          });
+        } catch (addErr) {
+          return {
+            ok: false,
+            reason: `wallet does not have chain ${target} and could not add it: ${addErr.message}`,
+          };
+        }
+      } else {
+        return { ok: false, reason: e.message || 'switch rejected' };
+      }
+    }
+
+    let observed = null;
+    try {
+      observed = await this.getCurrentChainId();
+    } catch (e) {
+      return { ok: false, reason: `could not read chain after switch: ${e.message}` };
+    }
+
+    if (observed !== null) {
+      this.chainId = observed;
+    }
+
+    if (observed !== target) {
+      return {
+        ok: false,
+        reason: `wallet reports chain ${observed}, expected ${target}`,
+        chainId: observed,
+      };
+    }
+
+    return { ok: true, chainId: observed };
+  }
+
+  async getCurrentChainId() {
+    const raw = this.rawProvider;
+    if (!raw) return null;
+
+    if (typeof raw.chainId === 'number' && Number.isFinite(raw.chainId)) {
+      return raw.chainId;
+    }
+
+    if (typeof raw.request === 'function') {
+      try {
+        const hex = await raw.request({ method: 'eth_chainId' });
+        return parseInt(hex, 16);
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
   async dispose() {
     try {
       await this.provider.disconnect?.();
     } catch {}
   }
+}
+
+function chainParamsFor(chainId) {
+  const TABLE = {
+    1:     { chainName: 'Ethereum',        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 } },
+    10:    { chainName: 'Optimism',        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 } },
+    56:    { chainName: 'BNB Chain',       nativeCurrency: { name: 'BNB',   symbol: 'BNB', decimals: 18 } },
+    137:   { chainName: 'Polygon',         nativeCurrency: { name: 'POL',   symbol: 'POL', decimals: 18 } },
+    8453:  { chainName: 'Base',            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 } },
+    42161: { chainName: 'Arbitrum One',    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 } },
+  };
+  const meta = TABLE[chainId] || { chainName: `Chain ${chainId}`, nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 } };
+  return {
+    chainId: '0x' + chainId.toString(16),
+    chainName: meta.chainName,
+    nativeCurrency: meta.nativeCurrency,
+    rpcUrls: [],
+    blockExplorerUrls: [],
+  };
 }
 
 export async function connectWalletConnect({
@@ -240,8 +480,8 @@ export async function connectWalletConnect({
     ],
     events: ['chainChanged', 'accountsChanged'],
     metadata: {
-      name: 'Sweeper',
-      description: 'Non-custodial cross-chain wallet sweeper',
+      name: 'PoolPort LiquiFi',
+      description: 'Non-custodial cross-chain wallet consolidation',
       url: window.location.origin,
       icons: [`${window.location.origin}/favicon.ico`],
     },
@@ -309,7 +549,6 @@ export class LedgerBackend {
 
         const sig = await ethApp.signTransaction(path, unsignedHex);
 
-        // Normalize `v` to yParity (0 or 1) for ethers v6.
         const v = normalizeV(sig.v);
 
         unsignedTx.signature = ethers.Signature.from({
@@ -351,6 +590,14 @@ export class LedgerBackend {
 
   getBitcoinKeyPair() {
     throw new Error('Ledger Bitcoin support not implemented in this build');
+  }
+
+  async switchChain(_targetChainId) {
+    return noopSwitchChain();
+  }
+
+  async getCurrentChainId() {
+    return null;
   }
 
   async dispose() {
@@ -489,6 +736,14 @@ export class TrezorBackend {
     throw new Error('Trezor Bitcoin support not implemented in this build');
   }
 
+  async switchChain(_targetChainId) {
+    return noopSwitchChain();
+  }
+
+  async getCurrentChainId() {
+    return null;
+  }
+
   async dispose() {}
 }
 
@@ -498,7 +753,7 @@ export async function connectTrezor({ derivationPath = "m/44'/60'/0'/0/0" } = {}
   await TrezorConnect.init({
     lazyLoad: true,
     manifest: {
-      email: 'hello@example.com',
+      email: 'info@poolport.xyz',
       appUrl: window.location.origin,
     },
   });

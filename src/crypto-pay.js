@@ -1,20 +1,26 @@
 /**
  * crypto-pay.js — Crypto payment modal with token → chain picker.
+ *
+ * showCryptoPaymentModal accepts an optional context object:
+ *   { gap: number, suggestedBundle: string }
+ *
+ * When `gap` is present, a banner at the top of the modal explains
+ * that the user needs `gap` more credits to continue, and the bundle
+ * picker highlights the smallest bundle that covers the gap.
  */
 
 import QRCode from 'qrcode';
-import { requestCryptoQuote, pollCryptoPayment } from './credits.js';
+import { requestCryptoQuote, pollCryptoPayment, newIdempotencyKey } from './credits.js';
 import { el } from './ui.js';
 
 const BUNDLES = [
-  { id: 'single',  label: '1 credit',  price: '$10',  hint: '$10.00 per sweep' },
-  { id: 'pack-5',  label: '5 credits', price: '$20',  hint: '$4.00 per sweep' },
-  { id: 'pack-10', label: '10 credits',price: '$40',  hint: '$4.00 per sweep' },
-  { id: 'pack-25', label: '25 credits',price: '$80',  hint: '$3.20 per sweep', badge: 'Best value' },
-  { id: 'pack-50', label: '50 credits',price: '$150', hint: '$3.00 per sweep' },
+  { id: 'single',  label: '1 credit',  price: '$10',  hint: '$10.00 per wallet', credits: 1 },
+  { id: 'pack-5',  label: '5 credits', price: '$20',  hint: '$4.00 per wallet',  credits: 5 },
+  { id: 'pack-10', label: '10 credits',price: '$40',  hint: '$4.00 per wallet',  credits: 10 },
+  { id: 'pack-25', label: '25 credits',price: '$80',  hint: '$3.20 per wallet',  credits: 25, badge: 'Best value' },
+  { id: 'pack-50', label: '50 credits',price: '$150', hint: '$3.00 per wallet',  credits: 50 },
 ];
 
-// Tokens first, then chains within each token.
 const TOKENS = [
   {
     id: 'usdc', label: 'USDC', icon: '🔵', hint: 'USD Coin — stablecoin',
@@ -60,7 +66,7 @@ const TOKENS = [
 
 let pollCancelled = false;
 
-export function showCryptoPaymentModal(defaultBundle = 'single') {
+export function showCryptoPaymentModal(defaultBundle = 'single', context = null) {
   return new Promise((resolve, reject) => {
     pollCancelled = false;
     const overlay = el('div', { class: 'modal-overlay' });
@@ -73,6 +79,7 @@ export function showCryptoPaymentModal(defaultBundle = 'single') {
       modal,
       resolve,
       reject,
+      context,
       cancel: () => {
         pollCancelled = true;
         overlay.remove();
@@ -99,20 +106,49 @@ function modalHeader(ctx) {
   ]);
 }
 
+function contextBanner(ctx) {
+  const c = ctx.context;
+  if (!c || !c.gap) return null;
+
+  const count = c.gap;
+  const text = count === 1
+    ? `You need 1 more credit to continue this sweep.`
+    : `You need ${count} more credits to continue this sweep.`;
+
+  return el('div', {
+    class: 'bundle-context-banner',
+    style: 'padding:12px 16px; margin: 16px 24px 0; background: rgba(88,166,255,0.1); border-left: 3px solid #58a6ff; border-radius: 4px; font-size: 13px; color: #c9d1d9;',
+  }, [
+    el('div', { style: 'font-weight:600; color:#e6edf3; margin-bottom:4px;', text: 'More credits required' }),
+    el('div', { text }),
+  ]);
+}
+
 function renderBundlePicker(ctx) {
   ctx.modal.innerHTML = '';
   ctx.modal.appendChild(modalHeader(ctx));
 
+  const banner = contextBanner(ctx);
+  if (banner) ctx.modal.appendChild(banner);
+
   const body = el('div', { class: 'modal-body' });
-  body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. Pick a bundle:' }));
+  body.appendChild(el('p', { class: 'hint', text: 'Credits never expire. One credit per wallet swept. Pick a bundle:' }));
+
+  // Highlight the smallest bundle that covers the requested gap, if any.
+  const suggested = ctx.context?.suggestedBundle;
 
   const list = el('div', { class: 'bundle-list' });
   for (const b of BUNDLES) {
+    const isSuggested = suggested && b.id === suggested;
     list.appendChild(el('button', {
-      class: 'bundle-card' + (b.badge ? ' featured' : ''),
+      class: 'bundle-card'
+        + (b.badge ? ' featured' : '')
+        + (isSuggested ? ' suggested' : ''),
+      style: isSuggested ? 'outline: 2px solid #58a6ff; outline-offset: -2px;' : '',
       onclick: () => renderTokenPicker(ctx, b),
     }, [
       b.badge ? el('div', { class: 'bundle-badge', text: b.badge }) : null,
+      isSuggested ? el('div', { class: 'bundle-badge', style: 'background:#58a6ff;', text: 'Suggested' }) : null,
       el('div', { class: 'bundle-label', text: b.label }),
       el('div', { class: 'bundle-price', text: b.price }),
       el('div', { class: 'bundle-hint', text: b.hint }),
@@ -125,6 +161,9 @@ function renderBundlePicker(ctx) {
 function renderTokenPicker(ctx, bundle) {
   ctx.modal.innerHTML = '';
   ctx.modal.appendChild(modalHeader(ctx));
+
+  const banner = contextBanner(ctx);
+  if (banner) ctx.modal.appendChild(banner);
 
   const body = el('div', { class: 'modal-body' });
 
@@ -142,7 +181,6 @@ function renderTokenPicker(ctx, bundle) {
       class: 'crypto-method',
       onclick: () => {
         if (t.chains.length === 1) {
-          // Only one chain — skip the picker and go straight to payment
           renderPayment(ctx, bundle, t.chains[0], t);
         } else {
           renderChainPicker(ctx, bundle, t);
@@ -164,6 +202,9 @@ function renderTokenPicker(ctx, bundle) {
 function renderChainPicker(ctx, bundle, token) {
   ctx.modal.innerHTML = '';
   ctx.modal.appendChild(modalHeader(ctx));
+
+  const banner = contextBanner(ctx);
+  if (banner) ctx.modal.appendChild(banner);
 
   const body = el('div', { class: 'modal-body' });
 
@@ -199,8 +240,6 @@ async function renderPayment(ctx, bundle, chain, token) {
 
   const body = el('div', { class: 'modal-body' });
 
-  // Back button: goes to chain picker if the token has multiple chains,
-  // otherwise back to the token picker.
   const backTarget = token.chains.length > 1
     ? () => renderChainPicker(ctx, bundle, token)
     : () => renderTokenPicker(ctx, bundle);
@@ -214,9 +253,13 @@ async function renderPayment(ctx, bundle, chain, token) {
   body.appendChild(el('p', { class: 'hint', text: 'Fetching quote...' }));
   ctx.modal.appendChild(body);
 
+  const quoteIdempotencyKey = newIdempotencyKey();
+
   let quote;
   try {
-    quote = await requestCryptoQuote(bundle.id, chain.id);
+    quote = await requestCryptoQuote(bundle.id, chain.id, {
+      idempotencyKey: quoteIdempotencyKey,
+    });
   } catch (err) {
     body.innerHTML = '';
     body.appendChild(el('p', { class: 'error', text: `Failed: ${err.message}` }));
@@ -242,9 +285,6 @@ async function renderPayment(ctx, bundle, chain, token) {
   const qrContainer = el('div', { class: 'crypto-qr' });
   body.appendChild(qrContainer);
 
-  // QR payload is the raw address. The unique fractional amount must
-  // be entered exactly; pre-filling it in a QR would risk truncation
-  // by the paying wallet, breaking exact-match detection.
   QRCode.toCanvas(quote.address, { width: 220, margin: 2 })
     .then((canvas) => {
       canvas.style.background = '#fff';

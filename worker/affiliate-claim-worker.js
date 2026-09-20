@@ -19,7 +19,8 @@
  *
  * Required secrets:
  *   HELIUS_KEY              — for Solana RPC
- *   SOLANA_CLAIMER_KEY     — base58 private key of FEE_WALLET_SOLANA
+ *   SOLANA_CLAIMER_KEY      — base58 private key of FEE_WALLET_SOLANA
+ *   OPERATOR_SECRET         — required for the manual /claim endpoint
  *
  * Required KV namespace:
  *   CLAIM_STATE             — dedup: which orderIds have been claimed
@@ -68,7 +69,7 @@ const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25
 const API_PAGE_SIZE = 100;
 
 // =====================================================================
-// CRON HANDLER
+// HANDLER
 // =====================================================================
 
 export default {
@@ -76,12 +77,37 @@ export default {
     ctx.waitUntil(runClaim(env));
   },
 
+  // ─── TONIGHT: manual /claim is now gated behind OPERATOR_SECRET.
+  // Previously anyone who knew the worker URL could trigger an on-chain
+  // claim run with the hot Solana key. The cron path is unaffected.
+  //
+  // Log every attempt (authorized or not) so probing is visible.
   async fetch(request, env) {
     const url = new URL(request.url);
+
     if (url.pathname === '/claim') {
+      const provided = request.headers.get('X-Operator-Secret') || '';
+      const expected = env.OPERATOR_SECRET || '';
+
+      if (!expected) {
+        console.error('OPERATOR_SECRET not configured — refusing /claim');
+        return new Response('OPERATOR_SECRET not configured', { status: 500 });
+      }
+
+      if (provided !== expected) {
+        console.warn(JSON.stringify({
+          ts: new Date().toISOString(),
+          event: 'unauthorized_claim_attempt',
+          ip: request.headers.get('cf-connecting-ip') || 'unknown',
+          ua: request.headers.get('user-agent') || '',
+        }));
+        return new Response('unauthorized', { status: 401 });
+      }
+
       const result = await runClaim(env);
       return Response.json(result);
     }
+
     return new Response('affiliate-claim-worker', { status: 200 });
   },
 };
@@ -95,6 +121,9 @@ async function runClaim(env) {
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_KEY}`;
     const connection = new Connection(rpcUrl, 'confirmed');
 
+    if (!env.SOLANA_CLAIMER_KEY) {
+      throw new Error('SOLANA_CLAIMER_KEY is not configured');
+    }
     const secretKey = bs58.decode(env.SOLANA_CLAIMER_KEY);
     const keypair = Keypair.fromSecretKey(secretKey);
     const beneficiary = keypair.publicKey;

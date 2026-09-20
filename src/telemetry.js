@@ -12,7 +12,7 @@ export async function initSentry() {
   Sentry.init({
     dsn: SENTRY_DSN,
     environment: 'production',
-    release: window.__SWEEP_RELEASE__ || 'dev',
+    release: window.__POOLPORT_LIQUIFI_RELEASE__ || 'dev',
     sendDefaultPii: false,
     tracesSampleRate: 0,
     sampleRate: 1.0,
@@ -28,41 +28,105 @@ export async function initSentry() {
   sentryLoaded = true;
 }
 
+// =====================================================================
+// SCRUBBING
+// =====================================================================
+//
+// Everything that leaves the browser passes through scrubDeep. The
+// scrubber:
+//
+//   1. Walks the ENTIRE event tree — message, exception, contexts,
+//      tags, user, extra, breadcrumbs, request — not just a subset.
+//   2. Redacts any 0x-prefixed hex string of 20+ chars (addresses,
+//      tx hashes, signatures).
+//   3. Redacts runs of 12-24 lowercase words separated by whitespace
+//      (BIP-39-shaped mnemonics).
+//   4. Drops any field whose key name matches /phrase|mnemonic|private|
+//      secret|seed|wif/i, regardless of shape.
+//   5. Blanks request bodies and query strings unconditionally.
+//
+// This is intentionally aggressive. False positives are fine; false
+// negatives are not.
+//
+// The BIP-39 heuristic will occasionally match prose in an error
+// message ("the quick brown fox jumped over the lazy dog and ran
+// away again into the woods and hills..."). That's acceptable — a
+// redacted error string is better than a leaked mnemonic.
+// =====================================================================
+
+const HEX_RE = /0x[a-fA-F0-9]{20,}/g;
+const BIP39_RE = /\b(?:[a-z]{3,8}\s+){11,23}[a-z]{3,8}\b/gi;
+const SENSITIVE_KEY_RE = /phrase|mnemonic|private|secret|seed|wif/i;
+
+function scrubString(s) {
+  if (typeof s !== 'string') return s;
+  return s.replace(HEX_RE, '0x[REDACTED]').replace(BIP39_RE, '[REDACTED-PHRASE]');
+}
+
+function scrubDeep(value, seen = new WeakSet()) {
+  if (value == null) return value;
+  if (typeof value === 'string') return scrubString(value);
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, seen));
+
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY_RE.test(k)) {
+      out[k] = '[REDACTED]';
+      continue;
+    }
+    out[k] = scrubDeep(v, seen);
+  }
+  return out;
+}
+
 function scrubEvent(event) {
-  if (event.request?.url) event.request.url = event.request.url.split('?')[0];
-  if (event.request?.data) event.request.data = '[scrubbed]';
-  if (event.extra) {
-    delete event.extra.phrase;
-    delete event.extra.mnemonic;
-    delete event.extra.privateKey;
-    delete event.extra.destination;
+  const scrubbed = scrubDeep(event);
+
+  if (scrubbed?.request) {
+    if (typeof scrubbed.request.url === 'string') {
+      try {
+        const u = new URL(scrubbed.request.url);
+        scrubbed.request.url = u.origin + u.pathname;
+      } catch {
+        scrubbed.request.url = '[unparseable]';
+      }
+    }
+    scrubbed.request.data = '[scrubbed]';
+    scrubbed.request.query_string = '[scrubbed]';
+    if (scrubbed.request.cookies) scrubbed.request.cookies = '[scrubbed]';
+    if (scrubbed.request.headers) scrubbed.request.headers = '[scrubbed]';
   }
-  if (event.message) {
-    event.message = event.message.replace(/0x[a-fA-F0-9]{20,}/g, '0x[REDACTED]');
-  }
-  return event;
+
+  return scrubbed;
 }
 
 function scrubBreadcrumb(bc) {
-  if (bc.category === 'fetch' || bc.category === 'xhr') {
-    if (bc.data?.url) bc.data.url = bc.data.url.split('?')[0];
-    if (bc.data?.body) bc.data.body = '[scrubbed]';
+  const scrubbed = scrubDeep(bc);
+  if (scrubbed?.data) {
+    if (scrubbed.data.body) scrubbed.data.body = '[scrubbed]';
+    if (scrubbed.data.url && typeof scrubbed.data.url === 'string') {
+      try {
+        const u = new URL(scrubbed.data.url);
+        scrubbed.data.url = u.origin + u.pathname;
+      } catch {}
+    }
   }
-  return bc;
+  return scrubbed;
+}
+
+// ─── TONIGHT: scrubExtra is now just a thin alias for scrubDeep. The
+// old version only handled a flat object and missed nested structures.
+function scrubExtra(context) {
+  return scrubDeep(context || {});
 }
 
 export function reportError(err, context = {}) {
   if (!sentryLoaded || !Sentry) { console.error(err); return; }
   Sentry.captureException(err, { extra: scrubExtra(context) });
-}
-
-function scrubExtra(context) {
-  const out = {};
-  for (const [k, v] of Object.entries(context || {})) {
-    if (/phrase|mnemonic|private|secret|seed/i.test(k)) continue;
-    out[k] = typeof v === 'string' ? v.replace(/0x[a-fA-F0-9]{20,}/g, '0x[REDACTED]') : v;
-  }
-  return out;
 }
 
 export function initPlausible() {

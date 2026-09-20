@@ -29,7 +29,7 @@ const SOL_MIN_SWEEP_LAMPORTS = 10_000_000n; // 0.01 SOL
 const AFFILIATE_FEE_BPS = 1000n;
 const BPS_DENOMINATOR = 10000n;
 
-const SOLANA_RPC_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
+const SOLANA_RPC_PROXY = 'https://poolport-liquifi-rpc.smallcapstradingsystem.workers.dev/rpc/solana';
 
 export function getConnection() {
   return new Connection(SOLANA_RPC_PROXY, 'confirmed');

@@ -198,19 +198,19 @@
             <div class="footer-bottom">
                 <p>© 2026 PoolPort. <a href="/">Home</a> · <a href="/guide.html">Guide</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/security-policy.html">Security</a></p>
                 <p style="font-size: 11px; color: #8b949e; margin-top: 12px;">
-                    Built {%BUILD_DATE%} · bundle {%APP_JS_SHA256%} · {%APP_JS_SIZE_KB%} KB
+                    Built 2026-09-20T05:22:56.374Z · bundle cf365e87d90d231d14a31464fa5580fb7a9977fb061d61955c145766d68ba2cc · 5445.8 KB
                 </p>
             </div>
         </div>
     </footer>
 
     <script>
-        window.__POOLPORT_LIQUIFI_RELEASE__ = "{%APP_JS_SHA256%}".slice(0, 12);
+        window.__POOLPORT_LIQUIFI_RELEASE__ = "cf365e87d90d231d14a31464fa5580fb7a9977fb061d61955c145766d68ba2cc".slice(0, 12);
     </script>
     <!-- TONIGHT: removed crossorigin="anonymous". The attribute is meant for
          cross-origin scripts and forces a CORS preflight on same-origin fetches,
          which browsers handle inconsistently. Since app.js is same-origin,
          integrity works without it. -->
-    <script src="app.js" integrity="{%APP_JS_SRI%}"></script>
+    <script src="app.js" integrity="sha384-b+S1aHwtMUH66ilcljFhOyb0Njm7IcwJFG6VbndZjsfE7YLdbF4IhAegRvdRSJMD"></script>
 </body>
 </html>

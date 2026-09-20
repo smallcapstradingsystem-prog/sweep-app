@@ -6,7 +6,7 @@ import { ethers } from 'ethers';
 import { PublicKey } from '@solana/web3.js';
 import QRCode from 'qrcode';
 import { state, resetState, clearAll } from './state.js';
-import { createWallet } from './wallet.js';
+import { createWallet, switchAndVerifyChain } from './wallet.js';
 import { validateMnemonic, deriveAll } from './derive.js';
 import { previewWallet as previewEvm, sweepEvm, getProvider, CHAINS as EVM_CHAINS } from './evm.js';
 import { previewSolanaWallet, sweepSolana, getConnection, selectSolanaKeypair } from './solana.js';
@@ -17,6 +17,7 @@ import {
   getClientId, fetchBalance, consumeCredit, invalidateBalanceCache,
   recordFee, requestGasSponsorship,
   fetchClaimInfo, claimFreeCredits,
+  newIdempotencyKey,
 } from './credits.js';
 import { showCryptoPaymentModal } from './crypto-pay.js';
 import {
@@ -45,6 +46,49 @@ function isBitcoinAddress(s) {
   if (/^bc1[a-z0-9]{39,59}$/.test(s)) return true;
   if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(s)) return true;
   return false;
+}
+
+// =====================================================================
+// WALLET COUNT
+// =====================================================================
+//
+// 1 credit = 1 wallet swept. A wallet is:
+//   - Mnemonic mode: one mnemonic phrase (spanning its EVM, Solana,
+//     and Bitcoin derivations).
+//   - Connected mode: the single connected address.
+//
+// All three family arrays in derivedKeys are indexed by mnemonic, so
+// their lengths match when the corresponding family is enabled. We
+// take the max to handle the case where EVM is disabled but Solana
+// or Bitcoin is enabled.
+
+function computeWalletCount() {
+  if (!state.derivedKeys) return 0;
+  if (state.walletType !== 'mnemonic') return 1;
+  return Math.max(
+    state.derivedKeys.evm.length,
+    state.derivedKeys.solana.length,
+    state.derivedKeys.bitcoin.length,
+    0,
+  );
+}
+
+// Pick the smallest bundle whose credits >= gap. Returns the bundle id
+// string, or null if gap is 0 or negative.
+const BUNDLE_TABLE = [
+  { id: 'single',  credits: 1 },
+  { id: 'pack-5',  credits: 5 },
+  { id: 'pack-10', credits: 10 },
+  { id: 'pack-25', credits: 25 },
+  { id: 'pack-50', credits: 50 },
+];
+
+function suggestBundleFor(gap) {
+  if (!gap || gap <= 0) return null;
+  for (const b of BUNDLE_TABLE) {
+    if (b.credits >= gap) return b.id;
+  }
+  return 'pack-50';
 }
 
 // =====================================================================
@@ -143,6 +187,13 @@ function syncDestinationFields() {
   if (chainList) chainList.style.display = evm ? '' : 'none';
 }
 
+function setRunButtonMode(isLive) {
+  const runBtn = $('#run-button');
+  if (!runBtn) return;
+  runBtn.textContent = isLive ? '⚡ EXECUTE LIVE SWEEP' : '▶ Run Dry Run';
+  runBtn.className = isLive ? 'btn btn-danger' : 'btn btn-primary';
+}
+
 // =====================================================================
 // FREE CLAIM BANNER
 // =====================================================================
@@ -156,7 +207,6 @@ function renderFreeClaimBanner(info) {
     freeClaimTimer = null;
   }
 
-  // 1. Already claimed on this clientId
   if (info.claimed) {
     banner.style.display = '';
     banner.innerHTML = `
@@ -171,7 +221,6 @@ function renderFreeClaimBanner(info) {
     return;
   }
 
-  // 2. Blocked at the IP level — 3 claims already used on this network
   if (info.blockedByIp) {
     const used = info.ipClaims ?? '?';
     const max = info.ipMax ?? '?';
@@ -188,7 +237,6 @@ function renderFreeClaimBanner(info) {
     return;
   }
 
-  // 3. Window expired without a claim
   if (info.expired) {
     banner.style.display = '';
     banner.innerHTML = `
@@ -203,7 +251,6 @@ function renderFreeClaimBanner(info) {
     return;
   }
 
-  // 4. Active — either a window is running or the user hasn't clicked yet
   const isRunning = !info.notStarted;
   banner.style.display = '';
   banner.innerHTML = `
@@ -272,11 +319,6 @@ function renderFreeClaimBanner(info) {
 // =====================================================================
 // CONNECT WALLET
 // =====================================================================
-
-async function connectWalletAndStore() {
-  const { walletType } = readInputs();
-  return connectWalletAndStoreForType(walletType);
-}
 
 async function connectWalletAndStoreForType(walletType) {
   track.walletSelected(walletType);
@@ -430,8 +472,11 @@ async function runPreview() {
       }
     }
 
-    logLine('\nPreview complete. Review before sweeping.');
+    const walletCount = computeWalletCount();
+    const costLabel = walletCount === 1 ? '1 credit' : `${walletCount} credits`;
+    logLine(`\nPreview complete. This sweep covers ${walletCount} wallet${walletCount === 1 ? '' : 's'} (${costLabel} on live run).`);
     show('#run-button');
+    setRunButtonMode(state.mode === 'live');
 
     const tokensFound =
       state.previews.evm.reduce((n, p) => n + p.tokens.length, 0) +
@@ -449,10 +494,10 @@ async function runPreview() {
 // PAYMENT
 // =====================================================================
 
-async function requirePayment() {
+async function requirePayment(context = null) {
   track.paymentStarted('crypto');
   try {
-    const result = await showCryptoPaymentModal('pack-5');
+    const result = await showCryptoPaymentModal('pack-5', context);
     track.paymentCompleted('crypto');
     return result;
   } catch (err) { throw err; }
@@ -462,7 +507,7 @@ async function requirePayment() {
 // GAS SPONSORSHIP (EVM only)
 // =====================================================================
 
-async function ensureWalletGasOnce(chain, walletAddress) {
+async function ensureWalletGasOnce(chain, walletAddress, idempotencyKey) {
   const provider = getProvider(chain);
   const perTxHuman = GAS_PER_TX_COST[chain];
   if (!perTxHuman) return { ok: true };
@@ -478,7 +523,7 @@ async function ensureWalletGasOnce(chain, walletAddress) {
   logLine(`  Gas short on ${chain} — requesting ${ethers.formatEther(shortfall)} from sponsor`);
 
   try {
-    const result = await requestGasSponsorship(chain, walletAddress, shortfall.toString());
+    const result = await requestGasSponsorship(chain, walletAddress, { idempotencyKey });
     if (!result.ok) {
       return { ok: false, reason: result.error || 'sponsor rejected request' };
     }
@@ -492,12 +537,13 @@ async function ensureWalletGasOnce(chain, walletAddress) {
   }
 }
 
-async function withGasSponsorship(chain, walletAddress, action) {
+async function withGasSponsorship(chain, walletAddress, sweepIdempotencyKey, action) {
   let sponsoredTotal = 0n;
   let lastError = null;
 
   for (let attempt = 1; attempt <= MAX_SPONSOR_ATTEMPTS; attempt++) {
-    const gas = await ensureWalletGasOnce(chain, walletAddress);
+    const attemptKey = `${sweepIdempotencyKey}:sponsor:${chain}:${walletAddress.toLowerCase()}:${attempt}`;
+    const gas = await ensureWalletGasOnce(chain, walletAddress, attemptKey);
     if (!gas.ok) {
       const e = new Error(`gas sponsor unavailable: ${gas.reason}`);
       e.sponsorUnavailable = true;
@@ -535,48 +581,50 @@ async function runSweep(live) {
   const startTime = Date.now();
   if (!state.derivedKeys) { logLine('ERROR: run Preview first'); return; }
 
+  const sweepIdempotencyKey = newIdempotencyKey();
+
   const inputs = readInputs();
   const destinations = inputs.destinations;
   const families = inputs.families;
 
+  const walletCount = computeWalletCount();
+  if (walletCount === 0) {
+    logLine('ERROR: no wallets to sweep. Run Preview first.');
+    return;
+  }
+
   if (live) {
-    logLine('\n⚠ Reminder: EVM wallets with no gas will be sponsored automatically for a fee.');
+    logLine('\n⚠ Reminder: EVM wallets with no gas are sponsored automatically.');
     logLine('  Solana source wallets need a small SOL balance to cover transaction fees.');
     logLine('  Bitcoin fees are deducted from the swept UTXOs.');
 
-    let balance = await fetchBalance();
-    if (balance < 1) {
-      logLine('No credits available. Opening payment modal...');
+    let balance = await fetchBalance({ force: true });
+    if (balance < walletCount) {
+      const gap = walletCount - balance;
+      logLine(`You have ${balance} credit${balance === 1 ? '' : 's'} but this sweep needs ${walletCount} (1 per wallet).`);
+      logLine(`Opening payment modal to buy ${gap} more...`);
+
       try {
-        await requirePayment();
-        balance = await fetchBalance({ force: true });
-        logLine(`Payment complete. Credits: ${balance}`);
+        await requirePayment({
+          gap,
+          suggestedBundle: suggestBundleFor(gap),
+        });
       } catch (err) {
         logLine(`Payment cancelled or failed: ${err.message}`);
         return;
       }
-    }
-    if (balance < 1) { logLine('ERROR: still no credits after payment.'); return; }
 
-    const confirm = prompt(
-      `This live sweep will consume 1 credit (you have ${balance}).\n` +
-      `If any EVM wallet needs gas, a $1 minimum sponsorship fee applies.\n\n` +
-      `Type LIVE_SWEEP_NOW to confirm:`
-    );
-    if (confirm !== 'LIVE_SWEEP_NOW') { logLine('Live sweep cancelled.'); return; }
-
-    try {
-      const newBalance = await consumeCredit('sweep');
-      logLine(`Credit consumed. Remaining: ${newBalance}`);
-      updateCreditsBadge(newBalance);
-    } catch (err) {
-      logLine(`ERROR: could not consume credit: ${err.message}`);
-      return;
+      balance = await fetchBalance({ force: true });
+      if (balance < walletCount) {
+        logLine(`ERROR: still short — you have ${balance} credit${balance === 1 ? '' : 's'} but need ${walletCount}. Aborting without consuming.`);
+        return;
+      }
+      logLine(`Payment complete. Credits: ${balance}. Proceeding with sweep.`);
     }
   }
 
   const dryRun = !live;
-  logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} STARTED ===`);
+  logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} STARTED (${walletCount} wallet${walletCount === 1 ? '' : 's'}) ===`);
   track.sweepStarted(live);
 
   state.results = { evm: [], solana: [], bitcoin: [] };
@@ -594,12 +642,57 @@ async function runSweep(live) {
   const solanaFeeTotal = () => feeReceipts.solana.reduce((sum, e) => sum + e.amountRaw, 0n);
   const bitcoinFeeTotal = () => feeReceipts.bitcoin.reduce((sum, e) => sum + e.amountRaw, 0n);
 
+  async function consumeWalletCredit(walletIndex) {
+    try {
+      const newBalance = await consumeCredit('sweep', {
+        idempotencyKey: `${sweepIdempotencyKey}:consume:wallet-${walletIndex}`,
+        count: 1,
+      });
+      updateCreditsBadge(newBalance);
+      return { ok: true, newBalance };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   try {
     if (families.evm) {
       const chainSkipReasons = {};
 
       for (const entry of state.derivedKeys.evm) {
         const address = entry.address;
+        const walletIndex = entry.index;
+
+        logLine(`\n─────────────── Wallet ${walletIndex + 1}/${walletCount} (EVM) ───────────────`);
+
+        if (live) {
+          const consumeRes = await consumeWalletCredit(walletIndex);
+          if (!consumeRes.ok) {
+            logLine(`  STOPPING: could not consume credit for wallet ${walletIndex + 1}: ${consumeRes.error}`);
+            logLine(`  Remaining wallets were not charged.`);
+            break;
+          }
+          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
+        }
+
+        // ─── Build signer ───
+        let signer;
+        try {
+          if (state.walletType === 'mnemonic') {
+            const provider = getProvider(inputs.evmChains[0] || 'base');
+            signer = entry.wallet.connect(provider);
+          } else {
+            // For connected wallets, getEthersSigner ignores the passed
+            // provider and uses the wallet's own. We still pass the
+            // first chain's provider for consistency; it's discarded.
+            const provider = getProvider(inputs.evmChains[0] || 'base');
+            signer = await state.wallet.getEthersSigner(provider);
+          }
+        } catch (e) {
+          logLine(`  FATAL: could not build signer: ${e.message}`);
+          reportError(e, { phase: 'sweep_evm_signer' });
+          continue;
+        }
 
         for (const chain of inputs.evmChains) {
           if (chainSkipReasons[chain]) {
@@ -609,27 +702,29 @@ async function runSweep(live) {
           }
 
           logLine(`\n[EVM ${chain}] ${address}`);
+
+          // ─── Chain switch + verification ───
+          //
+          // For backends with a chain concept (extension, WalletConnect)
+          // this asks the wallet to move and verifies the move happened.
+          // For backends without one (mnemonic, hardware), the switch
+          // is a no-op and the signer will use whatever chainId is on
+          // the tx.
+          //
+          // On failure after retries, we skip this chain for this wallet
+          // and continue. Other chains and other wallets are unaffected.
+          if (state.walletType !== 'mnemonic') {
+            const cfg = EVM_CHAINS[chain];
+            const switchResult = await switchAndVerifyChain(state.wallet, cfg.chainId, logLine);
+            if (!switchResult.ok) {
+              logLine(`  SKIPPED: could not switch wallet to ${chain} — ${switchResult.reason}`);
+              chainSkipReasons[chain] = `wallet cannot switch to ${chain}`;
+              continue;
+            }
+          }
+
           try {
             const provider = getProvider(chain);
-
-            let signer;
-            if (state.walletType === 'mnemonic') {
-              signer = entry.wallet.connect(provider);
-            } else if (state.walletType === 'extension') {
-              const cfg = EVM_CHAINS[chain];
-              try {
-                await state.wallet.switchChain(cfg.chainId);
-              } catch (e) {
-                logLine(`  SKIPPED: could not switch wallet to ${chain} — ${e.message}`);
-                chainSkipReasons[chain] = `wallet cannot switch to ${chain}`;
-                continue;
-              }
-              await new Promise((r) => setTimeout(r, 300));
-              signer = await state.wallet.getEthersSigner(provider);
-            } else {
-              signer = await state.wallet.getEthersSigner(provider);
-            }
-
             const preview = state.previews.evm.find((p) => p.address === address && p.chain === chain);
             const tokens = preview?.tokens || [];
 
@@ -640,9 +735,12 @@ async function runSweep(live) {
 
             if (live) {
               try {
-                const wrapped = await withGasSponsorship(chain, address, async () => {
-                  return await sweepEvm(chain, signer, { ...sweepOpts, dryRun: false });
-                });
+                const wrapped = await withGasSponsorship(
+                  chain, address, `${sweepIdempotencyKey}:wallet-${walletIndex}`,
+                  async () => {
+                    return await sweepEvm(chain, signer, { ...sweepOpts, dryRun: false });
+                  }
+                );
                 sweepResult = wrapped.result;
                 sponsoredForThisWallet = wrapped.sponsoredTotal;
               } catch (e) {
@@ -654,6 +752,11 @@ async function runSweep(live) {
                 throw e;
               }
             } else {
+              // Dry run still needs a valid signer even though nothing
+              // is signed. For extension/wc, getEthersSigner already
+              // returned a JsonRpcSigner; for mnemonic we connected the
+              // wallet to the provider. Both work with sweepEvm's
+              // dry-run path because it never calls signer.sendTransaction.
               sweepResult = await sweepEvm(chain, signer, { ...sweepOpts, dryRun: true });
             }
 
@@ -666,7 +769,12 @@ async function runSweep(live) {
 
             const feePortion = BigInt(sweepResult.feeReceivedRaw || '0');
             if (feePortion > 0n) {
-              feeReceipts.evm.push({ chain, sourceAddress: address, amountRaw: feePortion });
+              feeReceipts.evm.push({
+                chain,
+                sourceAddress: address,
+                amountRaw: feePortion,
+                feeVerified: sweepResult.feeVerifiedOnChain === true,
+              });
             }
 
             for (const s of sweepResult.swaps) {
@@ -705,7 +813,20 @@ async function runSweep(live) {
         }
 
         const { keypair, address } = selected;
-        logLine(`\n[Solana] ${address}`);
+        logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Solana) ───────────────`);
+        logLine(`[Solana] ${address}`);
+
+        const evmHandledThisIndex = families.evm && state.derivedKeys.evm.some((e) => e.index === index);
+        if (live && !evmHandledThisIndex) {
+          const consumeRes = await consumeWalletCredit(index);
+          if (!consumeRes.ok) {
+            logLine(`  STOPPING: could not consume credit for wallet ${index + 1}: ${consumeRes.error}`);
+            logLine(`  Remaining wallets were not charged.`);
+            break;
+          }
+          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
+        }
+
         try {
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
           const SOL_MIN_FOR_ORDER = 25_000_000n;
@@ -745,7 +866,23 @@ async function runSweep(live) {
 
     if (families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { keyPair, address, index } of state.derivedKeys.bitcoin) {
-        logLine(`\n[Bitcoin] ${address}`);
+        logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Bitcoin) ───────────────`);
+        logLine(`[Bitcoin] ${address}`);
+
+        const evmHandledThisIndex = families.evm && state.derivedKeys.evm.some((e) => e.index === index);
+        const solanaHandledThisIndex = families.solana && state.derivedKeys.solana.some((s) => s.index === index);
+        const alreadyConsumed = evmHandledThisIndex || solanaHandledThisIndex;
+
+        if (live && !alreadyConsumed) {
+          const consumeRes = await consumeWalletCredit(index);
+          if (!consumeRes.ok) {
+            logLine(`  STOPPING: could not consume credit for wallet ${index + 1}: ${consumeRes.error}`);
+            logLine(`  Remaining wallets were not charged.`);
+            break;
+          }
+          logLine(`  Credit consumed. Remaining: ${consumeRes.newBalance}`);
+        }
+
         try {
           const r = await sweepBitcoin(address, keyPair, {
             dryRun, logLine,
@@ -828,6 +965,7 @@ async function runSweep(live) {
     if (solanaFeeTotal() > 0n) chainsSwept.push('solana→eth');
     if (bitcoinFeeTotal() > 0n) chainsSwept.push('bitcoin→eth');
 
+    logLine(`  Wallets swept:     ${walletCount}`);
     logLine(`  Chains swept:      ${chainsSwept.length ? chainsSwept.join(', ') : '(none)'}`);
     logLine(`  Tokens processed:  ${successes + failures}`);
     logLine(`  Successful swaps:  ${successes}`);
@@ -870,7 +1008,7 @@ async function runSweep(live) {
       logLine(`  Destination:       ${destinations.evm || '(not set)'}`);
       logLine(`  Estimated time:    within a few minutes`);
       logLine('');
-      logLine('  Thank you for using Sweeper.');
+      logLine('  Thank you for using PoolPort LiquiFi.');
     }
 
     logLine('═══════════════════════════════════════════════════════════');
@@ -878,8 +1016,9 @@ async function runSweep(live) {
     const hasEvmReceipts = feeReceipts.evm.length > 0;
     const hasSolanaReceipts = feeReceipts.solana.length > 0;
     const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
+    const hasAnyReceipts = hasEvmReceipts || hasSolanaReceipts || hasBitcoinReceipts;
 
-    if (live && (hasEvmReceipts || hasSolanaReceipts || hasBitcoinReceipts)) {
+    if (live && (hasAnyReceipts || successes > 0)) {
       try {
         const receipts = [];
 
@@ -890,6 +1029,7 @@ async function runSweep(live) {
             amountRaw: entry.amountRaw.toString(), decimals, symbol: 'USDC',
             recipient: FEE_WALLET_EVM, userDestination: destinations.evm,
             feeCollectedAtSwap: true,
+            clientFeeVerified: entry.feeVerified === true,
           });
         }
 
@@ -915,13 +1055,13 @@ async function runSweep(live) {
           });
         }
 
-        if (receipts.length > 0) {
-          await recordFee({
-            receipts, gasSponsorships,
-            sweepDurationMs: Date.now() - startTime,
-            successes, failures,
-          });
-        }
+        await recordFee({
+          receipts, gasSponsorships,
+          sweepDurationMs: Date.now() - startTime,
+          successes, failures,
+        }, {
+          idempotencyKey: `${sweepIdempotencyKey}:record`,
+        });
       } catch (e) {
         logLine(`\nWARN: could not record sweep on the worker: ${e.message}`);
       }
@@ -945,8 +1085,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   getClientId();
 
-  // Kick off the free-claim banner. Retry once on failure so a
-  // transient network blip doesn't hide the launch offer.
   fetchClaimInfo()
     .then(renderFreeClaimBanner)
     .catch(async (err) => {
@@ -957,7 +1095,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderFreeClaimBanner(info);
       } catch (err2) {
         console.warn('Claim info retry failed:', err2.message);
-        // Silent — the app is still usable, only the banner is missing.
       }
     });
 
@@ -991,7 +1128,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   $('#preview-button').addEventListener('click', runPreview);
-  $('#run-button').addEventListener('click', () => runSweep(state.mode === 'live'));
+
+  $('#run-button').addEventListener('click', () => {
+    runSweep(state.mode === 'live');
+  });
 
   $('#buy-credits-button')?.addEventListener('click', async () => {
     try {
@@ -1014,11 +1154,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $$('input[name=mode]').forEach((radio) => {
     radio.addEventListener('change', (e) => {
       state.mode = e.target.value;
-      const runBtn = $('#run-button');
-      if (runBtn) {
-        runBtn.textContent = state.mode === 'live' ? '⚡ EXECUTE LIVE SWEEP' : '▶ Run Dry Run';
-        runBtn.className = state.mode === 'live' ? 'btn btn-danger' : 'btn btn-primary';
-      }
+      setRunButtonMode(state.mode === 'live');
     });
   });
 

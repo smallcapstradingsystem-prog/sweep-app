@@ -86,9 +86,14 @@ const WETH_ABI = [...ERC20_ABI, 'function deposit() payable'];
 
 const ZERO_EX_ALLOWANCE_HOLDER = '0x0000000000001fF3684f28c67538d4D072C22734';
 
-const ZERO_EX_PROXY = 'https://sweep-rpc.smallcapstradingsystem.workers.dev/0x';
+const ZERO_EX_PROXY = 'https://poolport-liquifi-rpc.smallcapstradingsystem.workers.dev/0x';
 
-const MIN_SWAP_VALUE_USDC = ethers.parseUnits('0.50', 6);
+// Per-chain minimum swap value. Fixed at 6 decimals in the original
+// code, which made the check a no-op on BNB (18-decimal USDC).
+function minSwapValueFor(chain) {
+  const decimals = chain === 'bnb' ? 18 : 6;
+  return ethers.parseUnits('0.50', decimals);
+}
 
 const providerCache = {};
 
@@ -243,6 +248,37 @@ function parseZeroExAmounts(quote) {
 export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   const cfg = CHAINS[chain];
   if (!cfg) throw new Error(`Unknown chain: ${chain}`);
+
+  // ─── TONIGHT (Fix for Finding 6): self-transfer guard runs FIRST,
+  // before any provider setup, signer derivation, or chain-switch
+  // prompt. The old order prompted extension wallets to switch chains
+  // and derived a signer just to reject immediately. The guard now
+  // reads the source address from opts when available, or defers
+  // (in which case the check runs after signer is derived, but before
+  // any network calls).
+  const userDestinationOpt = opts.userDestination;
+  const sourceAddressHint = opts.sourceAddressHint || (signerOrWallet.address || null);
+
+  if (
+    userDestinationOpt &&
+    sourceAddressHint &&
+    userDestinationOpt.toLowerCase() === sourceAddressHint.toLowerCase()
+  ) {
+    return {
+      chain,
+      address: sourceAddressHint,
+      recipient: FEE_WALLET_EVM,
+      userDestination: userDestinationOpt,
+      swaps: [],
+      transfers: [],
+      errors: ['destination address equals the source wallet — nothing to sweep'],
+      usdcReceivedRaw: '0',
+      userReceivedRaw: '0',
+      feeReceivedRaw: '0',
+      feeVerifiedOnChain: false,
+    };
+  }
+
   const provider = getProvider(chain);
   const signer = signerOrWallet.connect
     ? (signerOrWallet.provider ? signerOrWallet : signerOrWallet.connect(provider))
@@ -252,6 +288,26 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   const usdcDecimals = chain === 'bnb' ? 18 : 6;
   const dryRun = !!opts.dryRun;
   const userDestination = opts.userDestination || address;
+
+  // Fallback check for the case where we didn't have a source-address
+  // hint before provider setup. Still runs before any network calls.
+  if (userDestination.toLowerCase() === address.toLowerCase()) {
+    return {
+      chain,
+      address,
+      recipient: FEE_WALLET_EVM,
+      userDestination,
+      swaps: [],
+      transfers: [],
+      errors: ['destination address equals the source wallet — nothing to sweep'],
+      usdcReceivedRaw: '0',
+      userReceivedRaw: '0',
+      feeReceivedRaw: '0',
+      feeVerifiedOnChain: false,
+    };
+  }
+
+  const minSwapValue = minSwapValueFor(chain);
 
   const results = {
     chain,
@@ -266,14 +322,6 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
     feeReceivedRaw: '0',
     feeVerifiedOnChain: false,
   };
-
-  // Self-transfer guard: if the destination equals the source wallet,
-  // the direct USDC transfer and every swap output becomes a no-op
-  // that only burns gas. Skip everything.
-  if (userDestination.toLowerCase() === address.toLowerCase()) {
-    results.errors.push('destination address equals the source wallet — nothing to sweep');
-    return results;
-  }
 
   let totalUser = 0n;
   let totalFee = 0n;
@@ -360,7 +408,6 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           continue;
         }
 
-        // Live
         const quote = await getZeroExQuote({
           chain,
           sellToken: token.address,
@@ -373,7 +420,8 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         });
 
         const { userPortion, feePortion } = parseZeroExAmounts(quote);
-        if (userPortion < MIN_SWAP_VALUE_USDC) {
+
+        if (userPortion < minSwapValue) {
           results.swaps.push({
             symbol: token.symbol,
             status: 'SKIPPED',
@@ -388,8 +436,6 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         );
         if (approveTx) await approveTx.wait();
 
-        // Record fee wallet's USDC balance before the swap so we can
-        // verify the fee actually landed.
         const beforeFee = await readBalance(FEE_WALLET_EVM);
 
         const tx = await signer.sendTransaction({
@@ -400,10 +446,10 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
         });
         const receipt = await tx.wait();
 
-        // Verify the fee delta.
         const afterFee = await readBalance(FEE_WALLET_EVM);
-        const actualFee = afterFee > beforeFee ? afterFee - beforeFee : feePortion;
-        results.feeVerifiedOnChain = true;
+        const observedDelta = afterFee > beforeFee ? afterFee - beforeFee : 0n;
+        const feeWasVerified = observedDelta === feePortion && feePortion > 0n;
+        const actualFee = feeWasVerified ? observedDelta : feePortion;
 
         totalUser += userPortion;
         totalFee += actualFee;
@@ -414,6 +460,9 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           received: ethers.formatUnits(userPortion, usdcDecimals),
           userShare: ethers.formatUnits(userPortion, usdcDecimals),
           feeShare: ethers.formatUnits(actualFee, usdcDecimals),
+          feeVerified: feeWasVerified,
+          feeObservedDelta: observedDelta.toString(),
+          feeExpected: feePortion.toString(),
           mode: '0x-atomic-split',
           status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
         });
@@ -474,12 +523,10 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             });
           }
         } else {
-          // Wrap native → WETH
           const weth = new ethers.Contract(cfg.weth, WETH_ABI, signer);
           const wrapTx = await weth.deposit({ value: wrapAmount });
           await wrapTx.wait();
 
-          // Quote
           const quote = await getZeroExQuote({
             chain,
             sellToken: cfg.weth,
@@ -492,7 +539,8 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
           });
 
           const { userPortion, feePortion } = parseZeroExAmounts(quote);
-          if (userPortion < MIN_SWAP_VALUE_USDC) {
+
+          if (userPortion < minSwapValue) {
             results.swaps.push({
               symbol: nativeSym,
               status: 'SKIPPED',
@@ -516,8 +564,9 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
             const receipt = await tx.wait();
 
             const afterFee = await readBalance(FEE_WALLET_EVM);
-            const actualFee = afterFee > beforeFee ? afterFee - beforeFee : feePortion;
-            results.feeVerifiedOnChain = true;
+            const observedDelta = afterFee > beforeFee ? afterFee - beforeFee : 0n;
+            const feeWasVerified = observedDelta === feePortion && feePortion > 0n;
+            const actualFee = feeWasVerified ? observedDelta : feePortion;
 
             totalUser += userPortion;
             totalFee += actualFee;
@@ -528,6 +577,9 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
               received: ethers.formatUnits(userPortion, usdcDecimals),
               userShare: ethers.formatUnits(userPortion, usdcDecimals),
               feeShare: ethers.formatUnits(actualFee, usdcDecimals),
+              feeVerified: feeWasVerified,
+              feeObservedDelta: observedDelta.toString(),
+              feeExpected: feePortion.toString(),
               mode: '0x-atomic-split',
               status: receipt.status === 1 ? 'SUCCESS' : 'FAILED',
             });
@@ -540,6 +592,11 @@ export async function sweepEvm(chain, signerOrWallet, opts = {}) {
   results.userReceivedRaw = totalUser.toString();
   results.feeReceivedRaw = totalFee.toString();
   results.usdcReceivedRaw = (totalUser + totalFee).toString();
+
+  const swapsWithFee = results.swaps.filter((s) => typeof s.feeVerified === 'boolean');
+  results.feeVerifiedOnChain = swapsWithFee.length > 0
+    && swapsWithFee.every((s) => s.feeVerified === true);
+
   return results;
 }
 

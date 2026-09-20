@@ -1,5 +1,5 @@
 /* =====================================================================
-   SWEEPER — MARKETING STYLES
+   POOLPORT LIQUIFI — MARKETING STYLES
    ===================================================================== */
 
 :root {
@@ -8,9 +8,9 @@
     --border: #1f2937;
     --text: #e6edf3;
     --muted: #8b949e;
-    --accent: #58a6ff;
-    --primary: #238636;
-    --primary-hover: #2ea043;
+    --accent: #00d4aa;
+    --primary: #00b894;
+    --primary-hover: #00d4aa;
     --danger: #da3633;
 }
 
@@ -40,8 +40,21 @@ a:hover { text-decoration: underline; }
     z-index: 100;
 }
 .nav .wrap { display: flex; justify-content: space-between; align-items: center; }
-.logo { font-weight: 700; font-size: 20px; color: var(--text); }
+.logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--text);
+}
 .logo:hover { text-decoration: none; }
+.brand-mark {
+    width: 22px;
+    height: 22px;
+    color: var(--accent);
+    flex-shrink: 0;
+}
 .nav-links { display: flex; gap: 24px; align-items: center; font-size: 14px; }
 .nav-links a { color: var(--muted); }
 .nav-links a:hover { color: var(--text); text-decoration: none; }
@@ -127,15 +140,11 @@ section .lede { text-align: center; margin-bottom: 60px; }
     margin-top: 40px;
 }
 
-/* Paragraph text in the problem section */
 .problem p {
     margin-bottom: 16px;
     color: var(--muted);
 }
 
-/* Bold headings inside the problem section render white and heavy.
-   The `.problem p strong` selector has higher specificity than
-   `.problem p`, so these headings always render bold white. */
 .problem p strong,
 .problem p > strong {
     color: var(--text);
@@ -177,7 +186,6 @@ section .lede { text-align: center; margin-bottom: 60px; }
     font-size: 15px;
 }
 
-/* Same treatment for the two lower headings */
 .problem-extra-block p strong,
 .problem-extra-block p > strong {
     color: var(--text);
@@ -441,8 +449,8 @@ section .lede { text-align: center; margin-bottom: 60px; }
    ===================================================================== */
 
 .promo-strip {
-  background: linear-gradient(90deg, rgba(88,166,255,0.15), rgba(88,166,255,0.05));
-  border-bottom: 1px solid rgba(88,166,255,0.25);
+  background: linear-gradient(90deg, rgba(0,212,170,0.15), rgba(0,212,170,0.05));
+  border-bottom: 1px solid rgba(0,212,170,0.25);
   padding: 12px 0;
   font-size: 14px;
 }
@@ -469,7 +477,7 @@ section .lede { text-align: center; margin-bottom: 60px; }
 }
 
 .promo-link {
-  color: #79c0ff;
+  color: #00d4aa;
   margin-left: 8px;
   text-decoration: none;
   font-weight: 500;

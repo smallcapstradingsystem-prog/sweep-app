@@ -6,7 +6,7 @@
  * worker, never in the client bundle.
  */
 
-const PROXY_URL = 'https://sweep-rpc.smallcapstradingsystem.workers.dev';
+const PROXY_URL = 'https://poolport-liquifi-rpc.smallcapstradingsystem.workers.dev';
 
 const PUBLIC_RPCS = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
