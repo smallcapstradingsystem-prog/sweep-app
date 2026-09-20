@@ -1,0 +1,234 @@
+/* =====================================================================
+   POOLPORT LIQUIFI — TRANSACTION CONSOLE
+   =====================================================================
+   Styles for the live sweep output in #run-log. The container is a
+   <div class="tx-console"> that renders as a monospace block. Every
+   child row is a <div class="tx-line"> with typed modifiers. The
+   console updates in place: token rows are opened, then closed with
+   their result after the transaction confirms.
+
+   Kept in a separate file so styles.css remains byte-identical to the
+   PoolPort app stylesheet.
+   ===================================================================== */
+
+.tx-console {
+    background: #030713;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--text-muted);
+    white-space: pre;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 640px;
+    min-height: 80px;
+    letter-spacing: 0;
+    tab-size: 4;
+}
+
+.tx-console::-webkit-scrollbar { width: 8px; height: 8px; }
+.tx-console::-webkit-scrollbar-track { background: transparent; }
+.tx-console::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 4px;
+}
+.tx-console::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+.tx-console:empty::before {
+    content: '(no output yet)';
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+/* ---------- LINES ---------- */
+
+.tx-line {
+    display: block;
+    white-space: pre;
+}
+
+.tx-line + .tx-line { margin-top: 0; }
+
+.tx-blank {
+    height: 0.9em;
+}
+
+/* ---------- FRAMES ---------- */
+
+.tx-frame-top,
+.tx-frame-mid,
+.tx-frame-bot {
+    color: var(--border-strong);
+}
+
+.tx-frame-label {
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+.tx-frame-sub {
+    color: var(--text-dim);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ---------- WALLET HEADER ---------- */
+
+.tx-wallet-head {
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+}
+
+.tx-wallet-index {
+    color: var(--accent);
+}
+
+.tx-wallet-total {
+    color: var(--text-dim);
+}
+
+.tx-wallet-addr {
+    color: var(--text-muted);
+}
+
+/* ---------- GAS / BRIDGE / TOKEN ROWS ---------- */
+
+.tx-row {
+    display: block;
+}
+
+.tx-row-icon {
+    display: inline-block;
+    width: 2ch;
+    text-align: center;
+    margin-right: 1ch;
+}
+
+.tx-row-label {
+    display: inline-block;
+    min-width: 14ch;
+    color: var(--text);
+}
+
+.tx-row-amount {
+    display: inline-block;
+    min-width: 16ch;
+    color: var(--text);
+    text-align: right;
+}
+
+.tx-row-status {
+    color: var(--text-muted);
+    margin-left: 2ch;
+}
+
+.tx-row-status.is-running { color: var(--warning); }
+.tx-row-status.is-success { color: var(--success); }
+.tx-row-status.is-failed  { color: var(--danger); }
+.tx-row-status.is-skipped { color: var(--text-dim); }
+
+.tx-row-result {
+    color: var(--text-muted);
+    padding-left: 6ch;
+}
+
+.tx-row-result-prefix {
+    color: var(--border-strong);
+    padding-right: 2ch;
+}
+
+.tx-row-result-mark {
+    display: inline-block;
+    width: 2ch;
+    text-align: center;
+}
+
+.tx-row-result-mark.is-success { color: var(--success); }
+.tx-row-result-mark.is-failed  { color: var(--danger); }
+.tx-row-result-mark.is-skipped { color: var(--text-dim); }
+.tx-row-result-mark.is-pending { color: var(--warning); }
+
+.tx-row-result-hash {
+    color: var(--accent);
+    display: inline-block;
+    min-width: 22ch;
+}
+
+.tx-row-result-out {
+    color: var(--text);
+    display: inline-block;
+    min-width: 18ch;
+    text-align: right;
+}
+
+.tx-row-result-time {
+    color: var(--text-dim);
+    display: inline-block;
+    min-width: 7ch;
+    text-align: right;
+}
+
+.tx-row-error {
+    color: var(--danger);
+    padding-left: 6ch;
+}
+
+/* ---------- WALLET FOOTER ---------- */
+
+.tx-wallet-foot {
+    color: var(--text-dim);
+    padding-left: 6ch;
+}
+
+.tx-wallet-foot-rule {
+    color: var(--border);
+}
+
+.tx-wallet-foot-value {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* ---------- SWEEP FOOTER ---------- */
+
+.tx-summary-key {
+    color: var(--text-muted);
+    display: inline-block;
+    min-width: 22ch;
+    padding-left: 3ch;
+}
+
+.tx-summary-val {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.tx-summary-note {
+    color: var(--text-dim);
+    padding-left: 3ch;
+}
+
+.tx-summary-hint {
+    color: var(--text-dim);
+    font-style: italic;
+    padding-left: 3ch;
+}
+
+/* ---------- ALERTS ---------- */
+
+.tx-warn {
+    color: var(--warning);
+    padding-left: 3ch;
+}
+
+.tx-error {
+    color: var(--danger);
+    padding-left: 3ch;
+    font-weight: 600;
+}

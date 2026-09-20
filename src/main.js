@@ -10,7 +10,7 @@ import { validateMnemonic, deriveAll } from './derive.js';
 import { previewWallet as previewEvm, sweepEvm, getProvider, CHAINS as EVM_CHAINS } from './evm.js';
 import { previewSolanaWallet, sweepSolana, getConnection, selectSolanaKeypair } from './solana.js';
 import { previewBitcoinWallet, sweepBitcoin } from './bitcoin.js';
-import { $, $$, show, hide, logLine, clearLog } from './ui.js';
+import { $, $$, show, hide, logLine, clearLog, log } from './ui.js';
 import { initSentry, initPlausible, reportError, track } from './telemetry.js';
 import { getClientId, requestGasSponsorship, recordFee, newIdempotencyKey } from './credits.js';
 import {
@@ -36,10 +36,6 @@ function isSolanaAddress(s) {
 // =====================================================================
 // WALLET COUNT
 // =====================================================================
-//
-// A "wallet" is one mnemonic (spanning its EVM, Solana, and Bitcoin
-// derivations) or the single connected address. Used only for progress
-// reporting now — there is no billing.
 
 function computeWalletCount() {
   if (!state.derivedKeys) return 0;
@@ -150,26 +146,26 @@ function setRunButtonMode(isLive) {
 async function connectWalletAndStoreForType(walletType) {
   track.walletSelected(walletType);
   try {
-    if (walletType === 'mnemonic') { logLine('Mnemonic mode: keys will be derived during Preview.'); return; }
+    if (walletType === 'mnemonic') { log.raw('Mnemonic mode: keys will be derived during Preview.'); return; }
     if (walletType === 'extension') {
-      logLine('Connecting to browser wallet...');
+      log.raw('Connecting to browser wallet...');
       const backend = await createWallet({ type: 'extension' });
       state.wallet = backend;
       const addr = await backend.getAddress();
-      logLine(`Connected: ${addr}`);
+      log.raw(`Connected: ${addr}`);
       $('#connected-address').textContent = addr;
       show('#connected-banner');
       return;
     }
     if (walletType === 'walletconnect') {
-      logLine('Connecting WalletConnect...');
+      log.raw('Connecting WalletConnect...');
       const qrContainer = $('#wc-qr');
       qrContainer.innerHTML = '';
       const backend = await createWallet({
         type: 'walletconnect',
         wcProjectId: WC_PROJECT_ID,
         wcOnUri: (uri) => {
-          logLine('Scan this QR with your mobile wallet:');
+          log.raw('Scan this QR with your mobile wallet:');
           QRCode.toCanvas(uri, { width: 240, margin: 2 })
             .then((canvas) => {
               canvas.style.background = '#fff';
@@ -177,38 +173,38 @@ async function connectWalletAndStoreForType(walletType) {
               canvas.style.padding = '12px';
               qrContainer.appendChild(canvas);
             })
-            .catch((err) => logLine(`QR render failed: ${err.message}`));
+            .catch((err) => log.raw(`QR render failed: ${err.message}`));
         },
       });
       state.wallet = backend;
       const addr = await backend.getAddress();
-      logLine(`Connected: ${addr}`);
+      log.raw(`Connected: ${addr}`);
       $('#connected-address').textContent = addr;
       show('#connected-banner');
       return;
     }
     if (walletType === 'ledger') {
-      logLine('Requesting Ledger access via WebHID...');
+      log.raw('Requesting Ledger access via WebHID...');
       const backend = await createWallet({ type: 'ledger' });
       state.wallet = backend;
       const addr = await backend.getAddress();
-      logLine(`Ledger connected: ${addr}`);
+      log.raw(`Ledger connected: ${addr}`);
       $('#connected-address').textContent = addr;
       show('#connected-banner');
       return;
     }
     if (walletType === 'trezor') {
-      logLine('Requesting Trezor access...');
+      log.raw('Requesting Trezor access...');
       const backend = await createWallet({ type: 'trezor' });
       state.wallet = backend;
       const addr = await backend.getAddress();
-      logLine(`Trezor connected: ${addr}`);
+      log.raw(`Trezor connected: ${addr}`);
       $('#connected-address').textContent = addr;
       show('#connected-banner');
       return;
     }
   } catch (e) {
-    logLine(`ERROR: ${e.message}`);
+    log.raw(`ERROR: ${e.message}`);
     reportError(e, { phase: 'connect', walletType });
     track.error('connect_failed');
   }
@@ -223,8 +219,8 @@ async function runPreview() {
   clearLog();
   const inputs = readInputs();
   const { errors, warnings } = validateInputs(inputs);
-  if (errors.length > 0) { for (const e of errors) logLine(`ERROR: ${e}`); return; }
-  for (const w of warnings) logLine(`WARN: ${w}`);
+  if (errors.length > 0) { for (const e of errors) log.raw(`ERROR: ${e}`); return; }
+  for (const w of warnings) log.raw(`WARN: ${w}`);
 
   track.previewStarted({
     walletType: inputs.walletType,
@@ -235,15 +231,15 @@ async function runPreview() {
 
   try {
     if (inputs.walletType === 'mnemonic') {
-      logLine(`Deriving keys for ${inputs.mnemonics.length} mnemonic(s)...`);
+      log.raw(`Deriving keys for ${inputs.mnemonics.length} mnemonic(s)...`);
       state.derivedKeys = deriveAll(inputs.mnemonics, inputs.families);
-      logLine(`Derived: ${state.derivedKeys.evm.length} EVM, ${state.derivedKeys.solana.length} Solana, ${state.derivedKeys.bitcoin.length} Bitcoin`);
-      for (const err of state.derivedKeys.errors) logLine(`WARN: ${err}`);
+      log.raw(`Derived: ${state.derivedKeys.evm.length} EVM, ${state.derivedKeys.solana.length} Solana, ${state.derivedKeys.bitcoin.length} Bitcoin`);
+      for (const err of state.derivedKeys.errors) log.raw(`WARN: ${err}`);
     } else {
-      if (!state.wallet) { logLine('ERROR: connect your wallet first'); return; }
+      if (!state.wallet) { log.raw('ERROR: connect your wallet first'); return; }
       const addr = await state.wallet.getAddress();
       state.derivedKeys = { evm: [{ address: addr, wallet: null, index: 0 }], solana: [], bitcoin: [], errors: [] };
-      logLine(`Using connected address: ${addr}`);
+      log.raw(`Using connected address: ${addr}`);
     }
 
     state.previews = { evm: [], solana: [], bitcoin: [] };
@@ -251,15 +247,16 @@ async function runPreview() {
     if (inputs.families.evm) {
       for (const { address, index } of state.derivedKeys.evm) {
         for (const chain of inputs.evmChains) {
-          logLine(`\nPreviewing ${chain} ${address}...`);
+          log.blank();
+          log.raw(`Previewing ${chain} ${address}...`);
           try {
             const p = await previewEvm(chain, address);
             state.previews.evm.push({ index, ...p });
-            logLine(`  native: ${p.native?.formatted ?? '0'} ${p.native?.symbol ?? ''}`);
-            for (const t of p.tokens) logLine(`  ${t.symbol}: ${t.formatted}`);
-            if (p.error) logLine(`  warning: ${p.error}`);
+            log.raw(`  native: ${p.native?.formatted ?? '0'} ${p.native?.symbol ?? ''}`);
+            for (const t of p.tokens) log.raw(`  ${t.symbol}: ${t.formatted}`);
+            if (p.error) log.raw(`  warning: ${p.error}`);
           } catch (e) {
-            logLine(`  ERROR: ${e.message}`);
+            log.raw(`  ERROR: ${e.message}`);
             reportError(e, { phase: 'preview_evm', chain });
           }
         }
@@ -269,38 +266,42 @@ async function runPreview() {
     if (inputs.families.solana && state.derivedKeys.solana.length > 0) {
       const conn = getConnection();
       for (const { candidates, index } of state.derivedKeys.solana) {
-        logLine(`\nSelecting Solana derivation...`);
+        log.blank();
+        log.raw(`Selecting Solana derivation...`);
         let selected;
         try {
-          selected = await selectSolanaKeypair(conn, candidates, logLine);
+          selected = await selectSolanaKeypair(conn, candidates, log.raw);
         } catch (e) {
-          logLine(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
+          log.raw(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
           selected = candidates.find((c) => c.name === 'phantom') || candidates[0];
         }
 
-        logLine(`\nPreviewing Solana ${selected.address}...`);
+        log.blank();
+        log.raw(`Previewing Solana ${selected.address}...`);
         try {
           const p = await previewSolanaWallet(conn, selected.address);
           state.previews.solana.push({ index, ...p });
-          logLine(`  SOL: ${p.sol?.formatted ?? 0}`);
-          logLine(`  tokens: ${p.tokens.length}`);
-        } catch (e) { logLine(`  ERROR: ${e.message}`); }
+          log.raw(`  SOL: ${p.sol?.formatted ?? 0}`);
+          log.raw(`  tokens: ${p.tokens.length}`);
+        } catch (e) { log.raw(`  ERROR: ${e.message}`); }
       }
     }
 
     if (inputs.families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { address, index } of state.derivedKeys.bitcoin) {
-        logLine(`\nPreviewing Bitcoin ${address}...`);
+        log.blank();
+        log.raw(`Previewing Bitcoin ${address}...`);
         try {
           const p = await previewBitcoinWallet(address);
           state.previews.bitcoin.push({ index, ...p });
-          logLine(`  utxos: ${p.utxos.length}, balance: ${p.balance} sats`);
-        } catch (e) { logLine(`  ERROR: ${e.message}`); }
+          log.raw(`  utxos: ${p.utxos.length}, balance: ${p.balance} sats`);
+        } catch (e) { log.raw(`  ERROR: ${e.message}`); }
       }
     }
 
     const walletCount = computeWalletCount();
-    logLine(`\nPreview complete. This sweep covers ${walletCount} wallet${walletCount === 1 ? '' : 's'}.`);
+    log.blank();
+    log.raw(`Preview complete. This sweep covers ${walletCount} wallet${walletCount === 1 ? '' : 's'}.`);
     show('#run-button');
     setRunButtonMode(state.mode === 'live');
 
@@ -333,7 +334,7 @@ async function ensureWalletGasOnce(chain, walletAddress, idempotencyKey) {
   }
 
   const shortfall = perTxWei - balance;
-  logLine(`  Gas short on ${chain} — requesting ${ethers.formatEther(shortfall)} from sponsor`);
+  log.raw(`  Gas short on ${chain} — requesting ${ethers.formatEther(shortfall)} from sponsor`);
 
   try {
     const result = await requestGasSponsorship(chain, walletAddress, { idempotencyKey });
@@ -343,7 +344,7 @@ async function ensureWalletGasOnce(chain, walletAddress, idempotencyKey) {
     if (result.sent === '0') {
       return { ok: true };
     }
-    logLine(`  Sponsored ${ethers.formatEther(result.sent)} (tx ${result.txHash})`);
+    log.raw(`  Sponsored ${ethers.formatEther(result.sent)} (tx ${result.txHash})`);
     return { ok: true, sponsoredWei: BigInt(result.sent) };
   } catch (e) {
     return { ok: false, reason: e.message };
@@ -378,7 +379,7 @@ async function withGasSponsorship(chain, walletAddress, sweepIdempotencyKey, act
       if (!isInsufficientGas) throw e;
 
       lastError = e;
-      logLine(`  Attempt ${attempt}/${MAX_SPONSOR_ATTEMPTS} failed with insufficient gas, retrying...`);
+      log.raw(`  Attempt ${attempt}/${MAX_SPONSOR_ATTEMPTS} failed with insufficient gas, retrying...`);
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -392,7 +393,7 @@ async function withGasSponsorship(chain, walletAddress, sweepIdempotencyKey, act
 
 async function runSweep(live) {
   const startTime = Date.now();
-  if (!state.derivedKeys) { logLine('ERROR: run Preview first'); return; }
+  if (!state.derivedKeys) { log.raw('ERROR: run Preview first'); return; }
 
   const sweepIdempotencyKey = newIdempotencyKey();
 
@@ -402,32 +403,33 @@ async function runSweep(live) {
 
   const walletCount = computeWalletCount();
   if (walletCount === 0) {
-    logLine('ERROR: no wallets to sweep. Run Preview first.');
+    log.raw('ERROR: no wallets to sweep. Run Preview first.');
     return;
   }
 
+  const dryRun = !live;
+
+  // Header
+  log.sweepHeader({
+    mode: dryRun ? 'dry run' : 'live',
+    walletCount,
+    chainCount: inputs.evmChains.length + (families.solana ? 1 : 0) + (families.bitcoin ? 1 : 0),
+  });
+
   if (live) {
-    logLine('\n⚠ Reminder: EVM wallets with no gas are sponsored automatically.');
-    logLine('  Solana source wallets need a small SOL balance to cover transaction fees.');
-    logLine('  Bitcoin fees are deducted from the swept UTXOs.');
+    log.raw('⚠ EVM wallets with no gas are sponsored automatically.');
+    log.raw('  Solana source wallets need a small SOL balance to cover transaction fees.');
+    log.raw('  Bitcoin fees are deducted from the swept UTXOs.');
+    log.blank();
   }
 
-  const dryRun = !live;
-  logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} STARTED (${walletCount} wallet${walletCount === 1 ? '' : 's'}) ===`);
   track.sweepStarted(live);
 
   state.results = { evm: [], solana: [], bitcoin: [] };
   let successes = 0;
   let failures = 0;
 
-  // Fee receipts — collected during the sweep, posted at the end.
-  // The fee itself has already been taken on-chain by the routing
-  // protocols. These receipts are for the operator's audit trail.
   const feeReceipts = { evm: [], solana: [], bitcoin: [] };
-
-  // Gas sponsorship accounting — how much native gas the sponsor
-  // funded per chain, so the operator can see the cost side of the
-  // ledger alongside the fee receipts.
   const sponsoredGasByChain = {};
   const chainHadAnySuccess = {};
 
@@ -439,7 +441,17 @@ async function runSweep(live) {
         const address = entry.address;
         const walletIndex = entry.index;
 
-        logLine(`\n─────────────── Wallet ${walletIndex + 1}/${walletCount} (EVM) ───────────────`);
+        const walletStart = Date.now();
+        let walletSuccesses = 0;
+        let walletSkips = 0;
+        let walletUsdcOut = 0;
+
+        log.walletHeader({
+          index: walletIndex,
+          total: walletCount,
+          family: 'EVM',
+          address,
+        });
 
         let signer;
         try {
@@ -451,26 +463,38 @@ async function runSweep(live) {
             signer = await state.wallet.getEthersSigner(provider);
           }
         } catch (e) {
-          logLine(`  FATAL: could not build signer: ${e.message}`);
+          log.raw(`  FATAL: could not build signer: ${e.message}`);
           reportError(e, { phase: 'sweep_evm_signer' });
           continue;
         }
 
         for (const chain of inputs.evmChains) {
           if (chainSkipReasons[chain]) {
-            logLine(`\n[EVM ${chain}] ${address}`);
-            logLine(`  SKIPPED: ${chainSkipReasons[chain]}`);
+            log.walletHeader({
+              index: walletIndex,
+              total: walletCount,
+              family: `EVM ${chain}`,
+              address,
+            });
+            log.raw(`  SKIPPED: ${chainSkipReasons[chain]}`);
+            walletSkips++;
             continue;
           }
 
-          logLine(`\n[EVM ${chain}] ${address}`);
+          log.walletHeader({
+            index: walletIndex,
+            total: walletCount,
+            family: `EVM ${chain}`,
+            address,
+          });
 
           if (state.walletType !== 'mnemonic') {
             const cfg = EVM_CHAINS[chain];
-            const switchResult = await switchAndVerifyChain(state.wallet, cfg.chainId, logLine);
+            const switchResult = await switchAndVerifyChain(state.wallet, cfg.chainId, log.raw);
             if (!switchResult.ok) {
-              logLine(`  SKIPPED: could not switch wallet to ${chain} — ${switchResult.reason}`);
+              log.raw(`  SKIPPED: could not switch wallet to ${chain} — ${switchResult.reason}`);
               chainSkipReasons[chain] = `wallet cannot switch to ${chain}`;
+              walletSkips++;
               continue;
             }
           }
@@ -480,6 +504,21 @@ async function runSweep(live) {
             const tokens = preview?.tokens || [];
 
             const sweepOpts = { tokens, userDestination: destinations.evm };
+
+            // Gas check — open a gas row
+            const perTxHuman = GAS_PER_TX_COST[chain];
+            let gasRow = null;
+            if (live && perTxHuman) {
+              const provider = getProvider(chain);
+              const perTxWei = ethers.parseEther(perTxHuman);
+              const balance = await provider.getBalance(address);
+              if (balance >= perTxWei) {
+                gasRow = log.gas({ chain, amount: ethers.formatEther(balance), unit: nativeSymbol(chain), status: 'sufficient' });
+                gasRow.done({ txHash: '', outUsdc: null, durationMs: 0 });
+              } else {
+                gasRow = log.gas({ chain, amount: '0', unit: nativeSymbol(chain), status: 'sponsoring' });
+              }
+            }
 
             let sweepResult;
             let sponsoredForThisWallet = 0n;
@@ -494,10 +533,16 @@ async function runSweep(live) {
                 );
                 sweepResult = wrapped.result;
                 sponsoredForThisWallet = wrapped.sponsoredTotal;
+
+                if (gasRow && sponsoredForThisWallet > 0n) {
+                  gasRow.done({ txHash: '', outUsdc: null, durationMs: 0 });
+                }
               } catch (e) {
                 if (e.sponsorUnavailable) {
-                  logLine(`  SKIPPED: ${e.message}`);
+                  if (gasRow) gasRow.fail(e.message);
+                  log.raw(`  SKIPPED: ${e.message}`);
                   chainSkipReasons[chain] = e.message;
+                  walletSkips++;
                   continue;
                 }
                 throw e;
@@ -524,26 +569,48 @@ async function runSweep(live) {
             }
 
             for (const s of sweepResult.swaps) {
-              const receivedNote = s.received ? ` (user out ${s.received} USDC)` : '';
-              const splitNote = s.userShare && s.feeShare
-                ? ` [user ${s.userShare} / fee ${s.feeShare}]`
-                : '';
-              logLine(`  swap ${s.symbol}: ${s.status}${s.txHash ? ' ' + s.txHash : ''}${receivedNote}${splitNote}${s.note ? ' (' + s.note + ')' : ''}${s.error ? ' — ' + s.error : ''}`);
-              if (s.status === 'SUCCESS') { successes++; chainHadAnySuccess[chain] = true; }
-              if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
+              const row = log.token({ symbol: s.symbol, amount: s.amountIn || '', status: 'swapping' });
+              if (s.status === 'SUCCESS') {
+                row.done({ txHash: s.txHash, outUsdc: s.received, durationMs: s.durationMs });
+                successes++;
+                walletSuccesses++;
+                walletUsdcOut += Number(s.received || 0);
+                chainHadAnySuccess[chain] = true;
+              } else if (s.status === 'SKIPPED' || s.status === 'NO_ROUTE') {
+                row.skip(s.note || s.status);
+                walletSkips++;
+              } else {
+                row.fail(s.error || s.status);
+                failures++;
+              }
             }
             for (const t of sweepResult.transfers) {
-              const receivedNote = t.received ? ` (user out ${t.received} USDC)` : '';
-              logLine(`  transfer ${t.symbol}: ${t.status}${t.txHash ? ' ' + t.txHash : ''}${receivedNote}`);
-              if (t.status === 'SUCCESS') { successes++; chainHadAnySuccess[chain] = true; }
-              if (t.status === 'FAILED' || t.status === 'ERROR') failures++;
+              const row = log.token({ symbol: t.symbol, amount: t.amountIn || '', status: 'transferring' });
+              if (t.status === 'SUCCESS') {
+                row.done({ txHash: t.txHash, outUsdc: t.received, durationMs: t.durationMs });
+                successes++;
+                walletSuccesses++;
+                walletUsdcOut += Number(t.received || 0);
+                chainHadAnySuccess[chain] = true;
+              } else {
+                row.fail(t.error || t.status);
+                failures++;
+              }
             }
-            for (const e of sweepResult.errors) logLine(`  ERROR: ${e}`);
+            for (const e of sweepResult.errors) log.raw(`  ERROR: ${e}`);
           } catch (e) {
-            logLine(`  FATAL: ${e.message}`);
+            log.raw(`  FATAL: ${e.message}`);
             reportError(e, { phase: 'sweep_evm', chain });
           }
         }
+
+        log.walletFooter({
+          index: walletIndex,
+          totalUsdc: walletUsdcOut,
+          swapCount: walletSuccesses,
+          skipCount: walletSkips,
+          durationMs: Date.now() - walletStart,
+        });
       }
     }
 
@@ -552,21 +619,33 @@ async function runSweep(live) {
       for (const { candidates, index } of state.derivedKeys.solana) {
         let selected;
         try {
-          selected = await selectSolanaKeypair(conn, candidates, logLine);
+          selected = await selectSolanaKeypair(conn, candidates, log.raw);
         } catch (e) {
-          logLine(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
+          log.raw(`  WARN: derivation selection failed (${e.message}); using Phantom default`);
           selected = candidates.find((c) => c.name === 'phantom') || candidates[0];
         }
 
         const { keypair, address } = selected;
-        logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Solana) ───────────────`);
-        logLine(`[Solana] ${address}`);
+        const walletStart = Date.now();
+        let walletSuccesses = 0;
+        let walletSkips = 0;
+        let walletUsdcOut = 0;
+
+        log.walletHeader({
+          index,
+          total: walletCount,
+          family: 'Solana',
+          address,
+        });
 
         try {
           const solLamports = BigInt(await conn.getBalance(keypair.publicKey));
           const SOL_MIN_FOR_ORDER = 25_000_000n;
+          const solBalance = Number(solLamports) / 1e9;
           if (solLamports < SOL_MIN_FOR_ORDER) {
-            logLine(`  SKIPPED: source wallet needs ~0.025 SOL to cover reserve plus order fees (has ${(Number(solLamports) / 1e9).toFixed(4)} SOL)`);
+            log.raw(`  SKIPPED: source wallet needs ~0.025 SOL to cover reserve plus order fees (has ${solBalance.toFixed(4)} SOL)`);
+            walletSkips++;
+            log.walletFooter({ index, totalUsdc: 0, swapCount: 0, skipCount: walletSkips, durationMs: Date.now() - walletStart });
             continue;
           }
 
@@ -587,26 +666,49 @@ async function runSweep(live) {
 
           for (const s of r.swaps) {
             const mintLabel = s.mint === 'SOL' ? 'SOL' : s.mint.slice(0, 8);
-            const receivedNote = s.received ? ` (user expected ${ethers.formatUnits(BigInt(s.received), 6)} USDC on Ethereum)` : '';
-            const orderNote = s.orderId ? ` order=${s.orderId.slice(0, 10)}...` : '';
-            const note = s.note ? ` (${s.note})` : '';
-            logLine(`  bridge ${mintLabel}: ${s.status} ${s.signature || ''}${orderNote}${receivedNote}${note}${s.error ? ' — ' + s.error : ''}`);
-            if (s.status === 'SUCCESS') successes++;
-            if (s.status === 'FAILED' || s.status === 'ERROR') failures++;
+            const row = log.bridge({ from: 'sol', to: 'eth', amount: s.amountIn || '', symbol: mintLabel, status: 'bridging' });
+            if (s.status === 'SUCCESS') {
+              row.done({ orderId: s.orderId || s.signature, outUsdc: s.received ? Number(s.received) / 1e6 : null, durationMs: s.durationMs });
+              successes++;
+              walletSuccesses++;
+              walletUsdcOut += s.received ? Number(s.received) / 1e6 : 0;
+            } else {
+              row.fail(s.error || s.status);
+              failures++;
+            }
           }
-          for (const e of r.errors) logLine(`  ERROR: ${e}`);
-        } catch (e) { logLine(`  FATAL: ${e.message}`); }
+          for (const e of r.errors) log.raw(`  ERROR: ${e}`);
+        } catch (e) {
+          log.raw(`  FATAL: ${e.message}`);
+        }
+
+        log.walletFooter({
+          index,
+          totalUsdc: walletUsdcOut,
+          swapCount: walletSuccesses,
+          skipCount: walletSkips,
+          durationMs: Date.now() - walletStart,
+        });
       }
     }
 
     if (families.bitcoin && state.derivedKeys.bitcoin.length > 0) {
       for (const { keyPair, address, index } of state.derivedKeys.bitcoin) {
-        logLine(`\n─────────────── Wallet ${index + 1}/${walletCount} (Bitcoin) ───────────────`);
-        logLine(`[Bitcoin] ${address}`);
+        const walletStart = Date.now();
+        let walletSuccesses = 0;
+        let walletSkips = 0;
+        let walletUsdcOut = 0;
+
+        log.walletHeader({
+          index,
+          total: walletCount,
+          family: 'Bitcoin',
+          address,
+        });
 
         try {
           const r = await sweepBitcoin(address, keyPair, {
-            dryRun, logLine,
+            dryRun, logLine: log.raw,
             userDestination: destinations.evm,
           });
           state.results.bitcoin.push({ index, ...r });
@@ -620,24 +722,32 @@ async function runSweep(live) {
             });
           }
 
-          const receivedNote = r.expectedUsdcOut && r.expectedUsdcOut !== '0'
-            ? ` (user expected ${ethers.formatUnits(BigInt(r.expectedUsdcOut), 6)} USDC on Ethereum)`
-            : '';
-          logLine(`  bridge btc→eth: ${r.status} ${r.txid || ''}${receivedNote}${r.error ? ' — ' + r.error : ''}`);
-          if (r.status === 'SUCCESS') successes++;
-          if (r.status === 'ERROR' || r.status === 'BROADCAST_ERROR') failures++;
-        } catch (e) { logLine(`  FATAL: ${e.message}`); }
+          const row = log.bridge({ from: 'btc', to: 'eth', amount: '', symbol: 'BTC', status: 'bridging' });
+          if (r.status === 'SUCCESS') {
+            const outUsdc = r.expectedUsdcOut && r.expectedUsdcOut !== '0' ? Number(r.expectedUsdcOut) / 1e6 : null;
+            row.done({ orderId: r.txid, outUsdc, durationMs: Date.now() - walletStart });
+            successes++;
+            walletSuccesses++;
+            walletUsdcOut += outUsdc || 0;
+          } else {
+            row.fail(r.error || r.status);
+            failures++;
+          }
+        } catch (e) {
+          log.raw(`  FATAL: ${e.message}`);
+        }
+
+        log.walletFooter({
+          index,
+          totalUsdc: walletUsdcOut,
+          swapCount: walletSuccesses,
+          skipCount: walletSkips,
+          durationMs: Date.now() - walletStart,
+        });
       }
     }
 
-    logLine(`\n=== ${dryRun ? 'DRY RUN' : 'LIVE SWEEP'} COMPLETE ===`);
-
-    // ─── Gas sponsorship accounting ───
-    // For each chain that had at least one successful swap, sum the
-    // sponsored wei across wallets, price it in USD, and apply the
-    // sponsorship fee rule (flat $1 min, 2× actual above $1). The
-    // result rides along on the fee receipt so the worker's operator
-    // view can show net-after-sponsorship, not gross.
+    // Gas sponsorship accounting
     const gasSponsorships = [];
     if (live) {
       const nativePriceCache = {};
@@ -680,72 +790,41 @@ async function runSweep(live) {
       }
     }
 
-    logLine('');
-    logLine('═══════════════════════════════════════════════════════════');
-    logLine('SWEEP SUMMARY');
-    logLine('═══════════════════════════════════════════════════════════');
-
-    logLine(`  Wallets swept:     ${walletCount}`);
-    logLine(`  Tokens processed:  ${successes + failures}`);
-    logLine(`  Successful swaps:  ${successes}`);
-    if (failures > 0) logLine(`  Skipped:           ${failures}`);
-    logLine('');
-
-    if (dryRun) {
-      logLine('  This was a dry run. No funds were moved.');
-      logLine('  Run in Live mode to execute the sweep.');
-    } else {
-      logLine('  Funds delivered directly to your destination:');
-      logLine('');
-
-      let totalUserValue = 0;
-
-      for (const r of state.results.evm) {
-        const userPart = BigInt(r.userReceivedRaw || '0');
-        if (userPart === 0n) continue;
-        const decimals = r.chain === 'bnb' ? 18 : 6;
-        logLine(`    ${r.chain.padEnd(10)} ${ethers.formatUnits(userPart, decimals)} USDC`);
-        totalUserValue += Number(ethers.formatUnits(userPart, decimals));
-      }
-
-      for (const r of state.results.solana) {
-        const userPart = BigInt(r.userReceivedRaw || '0');
-        if (userPart === 0n) continue;
-        logLine(`    ${'solana→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via deBridge, est.)`);
-        totalUserValue += Number(ethers.formatUnits(userPart, 6));
-      }
-
-      for (const r of state.results.bitcoin) {
-        const userPart = BigInt(r.userReceivedRaw || '0');
-        if (userPart === 0n) continue;
-        logLine(`    ${'bitcoin→eth'.padEnd(10)} ${ethers.formatUnits(userPart, 6)} USDC (via THORChain, est.)`);
-        totalUserValue += Number(ethers.formatUnits(userPart, 6));
-      }
-
-      logLine('');
-      logLine(`  Total to you:      ~$${totalUserValue.toFixed(2)}`);
-      logLine(`  Destination:       ${destinations.evm || '(not set)'}`);
-      logLine(`  Estimated time:    within a few minutes`);
-
-      if (gasSponsorships.length > 0) {
-        logLine('');
-        logLine('  Gas sponsorship (cost to operator):');
-        for (const gs of gasSponsorships) {
-          logLine(`    ${gs.chain.padEnd(10)} ${(gs.estimatedCostUsdCents / 100).toFixed(2)} USD actual, ${(gs.sponsorshipFeeUsdCents / 100).toFixed(2)} USD billed`);
-        }
-      }
-
-      logLine('');
-      logLine('  Thank you for using PoolPort LiquiFi.');
+    // Grand total
+    let totalUserValue = 0;
+    for (const r of state.results.evm) {
+      const userPart = BigInt(r.userReceivedRaw || '0');
+      if (userPart === 0n) continue;
+      const decimals = r.chain === 'bnb' ? 18 : 6;
+      totalUserValue += Number(ethers.formatUnits(userPart, decimals));
+    }
+    for (const r of state.results.solana) {
+      const userPart = BigInt(r.userReceivedRaw || '0');
+      if (userPart === 0n) continue;
+      totalUserValue += Number(ethers.formatUnits(userPart, 6));
+    }
+    for (const r of state.results.bitcoin) {
+      const userPart = BigInt(r.userReceivedRaw || '0');
+      if (userPart === 0n) continue;
+      totalUserValue += Number(ethers.formatUnits(userPart, 6));
     }
 
-    logLine('═══════════════════════════════════════════════════════════');
+    log.sweepFooter({
+      mode: dryRun ? 'dry-run' : 'live',
+      durationMs: Date.now() - startTime,
+      walletCount,
+      tokensProcessed: successes + failures,
+      successes,
+      skips: failures,
+      totalUsdc: totalUserValue,
+      destination: destinations.evm,
+      sponsorships: gasSponsorships,
+      note: dryRun
+        ? 'dry run — no funds moved. switch to Live mode to execute.'
+        : 'fee taken at swap time by the routing protocol. 90% delivered.',
+    });
 
-    // ─── Record fee receipts ───
-    // The 10% was already taken on-chain by the routing protocols.
-    // This call is the operator's audit trail — it does not move
-    // money. Gas sponsorships ride along so the operator sees net
-    // after paying for user gas.
+    // Record fee receipts
     const hasEvmReceipts = feeReceipts.evm.length > 0;
     const hasSolanaReceipts = feeReceipts.solana.length > 0;
     const hasBitcoinReceipts = feeReceipts.bitcoin.length > 0;
@@ -797,7 +876,7 @@ async function runSweep(live) {
           idempotencyKey: `${sweepIdempotencyKey}:record`,
         });
       } catch (e) {
-        logLine(`\nWARN: could not record sweep on the worker: ${e.message}`);
+        log.raw(`WARN: could not record sweep on the worker: ${e.message}`);
       }
     }
 
@@ -807,6 +886,13 @@ async function runSweep(live) {
     track.error('sweep_fatal');
     throw e;
   }
+}
+
+function nativeSymbol(chain) {
+  return {
+    ethereum: 'ETH', arbitrum: 'ETH', optimism: 'ETH',
+    base: 'ETH', polygon: 'POL', bnb: 'BNB',
+  }[chain] || '';
 }
 
 // =====================================================================
